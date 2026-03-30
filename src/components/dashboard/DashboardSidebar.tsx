@@ -28,7 +28,7 @@ export function DashboardSidebar({ open, onNavigate }: DashboardSidebarProps) {
           <img className={styles.brandLogo} src="/brand/domlivo-logo.svg" alt="" />
         </span>
         <span className={styles.brandText}>
-          <span className={styles.aiGradientText}>AI</span>
+          <span className={styles.aiGradientText}>AI Agent</span>
         </span>
       </div>
 

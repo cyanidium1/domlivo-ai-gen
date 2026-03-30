@@ -29,6 +29,8 @@ const envSchema = z
     SANITY_DATASET: optionalNonEmpty,
     SANITY_API_VERSION: z.string().min(1).default("2024-01-01"),
     SANITY_READ_TOKEN: optionalNonEmpty,
+    SANITY_WRITE_TOKEN: optionalNonEmpty,
+    SANITY_API_TOKEN: optionalNonEmpty,
   })
   .strict();
 
@@ -54,6 +56,8 @@ export function getServerEnv(): ServerEnv {
     SANITY_DATASET: process.env.SANITY_DATASET,
     SANITY_API_VERSION: process.env.SANITY_API_VERSION,
     SANITY_READ_TOKEN: process.env.SANITY_READ_TOKEN,
+    SANITY_WRITE_TOKEN: process.env.SANITY_WRITE_TOKEN,
+    SANITY_API_TOKEN: process.env.SANITY_API_TOKEN,
   });
   if (!parsed.success) {
     throw new AppError("CONFIG_ERROR", "Invalid server environment configuration", 500, parsed.error.flatten());
@@ -76,6 +80,23 @@ export function getServerEnv(): ServerEnv {
       "OPENAI_API_KEY is required when TRANSCRIPTION_PROVIDER=openai or DRAFT_PROVIDER=openai",
       500,
     );
+  }
+
+  if (parsed.data.PUBLISH_PROVIDER === "sanity") {
+    if (!parsed.data.SANITY_PROJECT_ID || !parsed.data.SANITY_DATASET) {
+      throw new AppError(
+        "CONFIG_ERROR",
+        "SANITY_PROJECT_ID and SANITY_DATASET are required when PUBLISH_PROVIDER=sanity",
+        500,
+      );
+    }
+    if (!parsed.data.SANITY_WRITE_TOKEN && !parsed.data.SANITY_API_TOKEN) {
+      throw new AppError(
+        "CONFIG_ERROR",
+        "SANITY_WRITE_TOKEN (or SANITY_API_TOKEN) is required when PUBLISH_PROVIDER=sanity",
+        500,
+      );
+    }
   }
 
   cached = parsed.data;

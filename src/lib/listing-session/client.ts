@@ -118,6 +118,17 @@ export async function publishSession(id: string) {
   return response.json();
 }
 
+export async function publishDraftSession(id: string) {
+  const response = await fetch(`/api/listing-sessions/${id}/publish-draft`, { method: "POST" });
+  if (!response.ok) {
+    const { message, details } = await readApiError(response);
+    const err: ApiErrorWithDetails = new Error(message);
+    err.details = details;
+    throw err;
+  }
+  return response.json();
+}
+
 export async function uploadAudio(id: string, file: File) {
   const formData = new FormData();
   formData.append("file", file);

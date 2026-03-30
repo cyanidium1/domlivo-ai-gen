@@ -1,10 +1,9 @@
 "use client";
 
-import { Mic, Send, Square } from "lucide-react";
+import { Mic, Pause, Play, Plus, Send, Square } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent } from "react";
 
-import { Upload } from "@/components/listing-session/Upload";
 import { ListingPreviewPanel } from "@/components/listing-preview/ListingPreviewPanel";
 import {
   generateSession,
@@ -39,6 +38,9 @@ import type { RequiredFactKey } from "@/lib/listing-session/intake";
 import type { ListingDraft } from "@/lib/validation/listing-session";
 import { createEmptyLocalizedString } from "@/lib/validation/property-i18n";
 import { useAppLanguage, type AppLanguage } from "@/contexts/language-context";
+import { toast } from "sonner";
+import { actionButtonClass, canPublishDraft, canPublishProperty } from "@/lib/listing-session/publish-eligibility";
+import { canSendMessage } from "@/lib/listing-session/composer-logic";
 
 type FormProps = {
   sessionId: string;
@@ -180,12 +182,15 @@ export function Form({ sessionId }: FormProps) {
   const [pendingPhotos, setPendingPhotos] = useState<File[]>([]);
 
   const [loading, setLoading] = useState(false);
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [isPublishing, setIsPublishing] = useState(false);
   const [loadingStep, setLoadingStep] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const [recording, setRecording] = useState(false);
   const [transcribing, setTranscribing] = useState(false);
   const [recordSeconds, setRecordSeconds] = useState(0);
+  const [recordPaused, setRecordPaused] = useState(false);
   const [activeImageKey, setActiveImageKey] = useState<string | null>(null);
   const [publishErrors, setPublishErrors] = useState<PublishGateErrors | null>(null);
 
@@ -194,6 +199,7 @@ export function Form({ sessionId }: FormProps) {
   const chunksRef = useRef<BlobPart[]>([]);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
+  const photoInputRef = useRef<HTMLInputElement | null>(null);
 
   const photoAssets = (session?.assets ?? []).filter((a) => a.storageKey.includes("/photo/"));
   const objectUrlByPendingKeyRef = useRef(new Map<string, string>());
@@ -281,6 +287,15 @@ export function Form({ sessionId }: FormProps) {
     });
   }, [session, effectiveEditedDraft]);
 
+  const canDraftPublish = useMemo(() => {
+    return canPublishDraft({
+      sourceText,
+      draft: effectiveEditedDraft,
+      extractedFacts: session?.extractedFacts ?? null,
+      assetsCount: (session?.assets ?? []).length + pendingPhotos.length,
+    });
+  }, [effectiveEditedDraft, pendingPhotos.length, session?.assets, session?.extractedFacts, sourceText]);
+
   const galleryAltIssues = useMemo(() => {
     const g = effectiveEditedDraft?.gallery ?? [];
     return g.filter((item) => {
@@ -289,6 +304,16 @@ export function Form({ sessionId }: FormProps) {
       return !String(s ?? "").trim();
     }).length;
   }, [effectiveEditedDraft]);
+
+  const canPropertyPublish = useMemo(() => {
+    if (!session) return false;
+    return canPublishProperty({
+      sessionId: session.id,
+      editedDraft: effectiveEditedDraft,
+      confirmation: session.confirmation,
+      galleryAltIssues,
+    });
+  }, [effectiveEditedDraft, galleryAltIssues, session]);
 
   const appendMessage = (message: ChatMessage) => {
     setMessages((prev) => [...prev, message]);
@@ -406,8 +431,10 @@ export function Form({ sessionId }: FormProps) {
 
   const generateFullListing = async () => {
     setLoading(true);
+    setIsGenerating(true);
     setLoadingStep("Analyzing listing...");
     setError(null);
+    toast.loading("Генерация началась…", { id: `gen-${sessionId}` });
     try {
       await uploadPendingPhotosIfAny();
       await patchSession(sessionId, { sourceText });
@@ -430,13 +457,16 @@ export function Form({ sessionId }: FormProps) {
         role: "assistant",
         content: "Full listing generated. Review preview and proceed to publish.",
       });
+      toast.success("Генерация завершена", { id: `gen-${sessionId}` });
     } catch (err) {
       const message = err instanceof Error ? err.message : "Full draft generation failed";
       setError(message);
       appendMessage({ id: makeId("system"), role: "system", content: message });
+      toast.error(`Ошибка генерации: ${message}`, { id: `gen-${sessionId}` });
     } finally {
       setLoadingStep(null);
       setLoading(false);
+      setIsGenerating(false);
     }
   };
 
@@ -456,21 +486,52 @@ export function Form({ sessionId }: FormProps) {
     }
   };
 
-  const publish = async () => {
+  const publishAsDraft = async () => {
+    if (!canDraftPublish || loading || isGenerating || isPublishing) return;
+    setIsPublishing(true);
+    setLoading(true);
+    setError(null);
+    toast.loading("Сохранение черновика…", { id: `pub-draft-${sessionId}` });
+    try {
+      await saveEditedDraft();
+      await loadSession();
+      toast.success("Черновик сохранён", { id: `pub-draft-${sessionId}` });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Draft publish failed";
+      setError(message);
+      toast.error(`Ошибка сохранения черновика: ${message}`, { id: `pub-draft-${sessionId}` });
+    } finally {
+      setLoading(false);
+      setIsPublishing(false);
+    }
+  };
+
+  const publishAsProperty = async () => {
+    if (!canPropertyPublish || loading || isGenerating || isPublishing) return;
     try {
       await saveEditedDraft();
     } catch {
       return;
     }
+    setIsPublishing(true);
     setLoading(true);
     setError(null);
+    toast.loading("Публикация объекта…", { id: `pub-prop-${sessionId}` });
     try {
       await publishSession(sessionId);
       await loadSession();
+      toast.success("Объект опубликован", { id: `pub-prop-${sessionId}` });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Publish failed");
+      const details = (err as ApiErrorWithDetails | null)?.details;
+      if (isPublishGateErrors(details)) {
+        setPublishErrors(details);
+      }
+      const msg = err instanceof Error ? err.message : "Publish failed";
+      toast.error(`Ошибка публикации: ${msg}`, { id: `pub-prop-${sessionId}` });
     } finally {
       setLoading(false);
+      setIsPublishing(false);
     }
   };
 
@@ -482,6 +543,7 @@ export function Form({ sessionId }: FormProps) {
   const startRecording = async () => {
     setError(null);
     setRecordSeconds(0);
+    setRecordPaused(false);
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       streamRef.current = stream;
@@ -523,6 +585,18 @@ export function Form({ sessionId }: FormProps) {
     }
   };
 
+  const togglePauseRecording = () => {
+    const rec = recorderRef.current;
+    if (!rec || !recording) return;
+    if (rec.state === "recording") {
+      rec.pause();
+      setRecordPaused(true);
+    } else if (rec.state === "paused") {
+      rec.resume();
+      setRecordPaused(false);
+    }
+  };
+
   const stopRecording = () => {
     if (!recorderRef.current) return;
     if (recorderRef.current.state !== "inactive") {
@@ -532,16 +606,34 @@ export function Form({ sessionId }: FormProps) {
 
   const sendMessage = async () => {
     const text = composerText.trim();
-    if (!text || loading) return;
+    const hasPhotos = pendingPhotos.length > 0;
+    if ((!text && !hasPhotos) || loading || transcribing) return;
 
-    appendMessage({ id: makeId("user"), role: "user", content: text });
+    appendMessage({
+      id: makeId("user"),
+      role: "user",
+      content: text || `Attached photos (${pendingPhotos.length})`,
+    });
     setComposerText("");
     setLoading(true);
+    setIsGenerating(true);
     setError(null);
     setLoadingStep(null);
+    toast.loading("Анализ начался…", { id: `gen-${sessionId}` });
 
     try {
       await uploadPendingPhotosIfAny();
+
+      if (!text) {
+        await loadSession();
+        appendMessage({
+          id: makeId("assistant"),
+          role: "assistant",
+          content: "Photos uploaded. Add details in the message box to run intake and generate the listing.",
+        });
+        toast.success("Фото загружены", { id: `gen-${sessionId}` });
+        return;
+      }
 
       const merged = sourceText ? `${sourceText}\n${text}` : text;
       setSourceText(merged);
@@ -585,13 +677,16 @@ export function Form({ sessionId }: FormProps) {
             : INTAKE_MESSAGES.draftGenerated[appLanguage],
         });
       }
+      toast.success("Анализ/генерация завершены", { id: `gen-${sessionId}` });
     } catch (err) {
       const message = err instanceof Error ? err.message : "Failed to send message";
       setError(message);
       appendMessage({ id: makeId("system"), role: "system", content: message });
+      toast.error(`Ошибка: ${message}`, { id: `gen-${sessionId}` });
     } finally {
       setLoadingStep(null);
       setLoading(false);
+      setIsGenerating(false);
     }
   };
 
@@ -600,6 +695,21 @@ export function Form({ sessionId }: FormProps) {
       event.preventDefault();
       void sendMessage();
     }
+  };
+
+  const canSend = useMemo(() => {
+    return canSendMessage({ text: composerText, photoCount: pendingPhotos.length, recording });
+  }, [composerText, pendingPhotos.length, recording]);
+
+  const onPickPhotos = () => {
+    if (loading || transcribing || recording) return;
+    photoInputRef.current?.click();
+  };
+
+  const onPhotoFilesSelected = (files: FileList | null) => {
+    const next = Array.from(files ?? []).filter((f) => f.type.startsWith("image/"));
+    if (!next.length) return;
+    setPendingPhotos((prev) => [...prev, ...next]);
   };
 
   const toggleConfirmField = async (field: CriticalConfirmationField, checked: boolean) => {
@@ -654,7 +764,7 @@ export function Form({ sessionId }: FormProps) {
     <div className="grid gap-4 lg:grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)]">
       <section className="min-w-0 rounded-2xl border border-slate-700/70 bg-slate-900/30 p-4 lg:sticky lg:top-[84px] lg:max-h-[calc(100vh-104px)] lg:overflow-y-auto">
         <div className="mb-3 flex items-center justify-between gap-2 flex-wrap">
-          <h3 className="text-sm font-semibold text-slate-100">AI Intake Chat</h3>
+          <h3 className="text-sm font-semibold text-slate-100">AI Agent Intake Chat</h3>
           <div className="flex items-center gap-2">
             {loadingStep ? <span className="text-xs text-slate-400">{loadingStep}</span> : null}
           </div>
@@ -682,43 +792,103 @@ export function Form({ sessionId }: FormProps) {
         </div>
 
         <div className="mt-3 rounded-xl border border-slate-800 bg-slate-950/25 p-3">
-          <Upload files={pendingPhotos} onFilesChange={setPendingPhotos} busy={loading || transcribing || recording} />
+          <input
+            ref={photoInputRef}
+            type="file"
+            accept="image/*"
+            multiple
+            className="hidden"
+            onChange={(e) => {
+              onPhotoFilesSelected(e.target.files);
+              e.currentTarget.value = "";
+            }}
+            disabled={loading || transcribing || recording}
+          />
 
-          <div className="mt-3 relative">
+          {pendingPreviewImages.length ? (
+            <div className="mb-2 flex gap-2 overflow-x-auto pb-1">
+              {pendingPreviewImages.map((img) => (
+                <div key={img.key} className="relative h-14 w-14 shrink-0 overflow-hidden rounded-lg border border-slate-700">
+                  <img src={img.url} alt={img.label} className="h-full w-full object-cover" />
+                  <button
+                    type="button"
+                    onClick={() => removePendingImage(img.key)}
+                    className="absolute right-1 top-1 rounded-md bg-slate-950/70 px-1.5 py-0.5 text-[10px] text-slate-100 cursor-pointer"
+                    title="Remove"
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+            </div>
+          ) : null}
+
+          <div className="flex items-end gap-2 rounded-2xl bg-slate-900/45 px-3 py-2 shadow-sm ring-1 ring-transparent focus-within:ring-slate-600/40">
+            <button
+              type="button"
+              onClick={onPickPhotos}
+              disabled={loading || transcribing || recording}
+              className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-slate-800/40 text-slate-100 hover:bg-slate-800/70 transition-colors disabled:opacity-50 cursor-pointer disabled:cursor-not-allowed"
+              title="Attach photos"
+            >
+              <Plus size={19} />
+            </button>
+
             <textarea
               ref={composerRef}
-              className="w-full min-h-[132px] resize-none overflow-y-auto rounded-xl border border-slate-700 bg-slate-950/40 px-3 pb-14 pt-3 text-sm text-slate-100 placeholder:text-slate-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400/80"
+              className="min-h-[44px] max-h-[180px] w-full resize-none overflow-y-auto rounded-xl bg-transparent px-2 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:outline-none"
               value={composerText}
               onChange={(e) => setComposerText(e.target.value)}
               onKeyDown={onComposerKeyDown}
-              placeholder="Describe the property or use voice input..."
-              rows={5}
+              placeholder="Message Domlivo AI Agent…"
+              rows={1}
             />
-            <button
-              className={[
-                "absolute bottom-3 right-16 inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-sm disabled:opacity-60",
-                recording
-                  ? "border-rose-700/70 bg-rose-950/30 text-rose-100 hover:bg-rose-900/30"
-                  : "border-slate-700 bg-slate-900/50 text-slate-100 hover:bg-slate-900/80",
-              ].join(" ")}
-              type="button"
-              onClick={recording ? stopRecording : () => void startRecording()}
-              disabled={loading || transcribing}
-            >
-              {recording ? <Square size={15} /> : <Mic size={15} />}
-              {recording ? `Stop (${formatTime(recordSeconds)})` : "Voice"}
-            </button>
 
-            <button
-              className="absolute bottom-3 right-3 inline-flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-900/70 px-3 py-2 text-sm font-medium text-slate-100 hover:bg-slate-900 disabled:opacity-60"
-              type="button"
-              onClick={() => void sendMessage()}
-              disabled={!composerText.trim() || loading || transcribing}
-            >
-              <Send size={15} />
-            </button>
+            <div className="flex items-center gap-2">
+              {recording ? (
+                <button
+                  type="button"
+                  onClick={togglePauseRecording}
+                  className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-slate-800/40 text-slate-100 hover:bg-slate-800/70 transition-colors cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
+                  title={recordPaused ? "Resume recording" : "Pause recording"}
+                >
+                  {recordPaused ? <Play size={19} /> : <Pause size={19} />}
+                </button>
+              ) : null}
+
+              <button
+                type="button"
+                onClick={recording ? stopRecording : () => void startRecording()}
+                disabled={loading || transcribing}
+                className={[
+                  "inline-flex h-10 w-10 items-center justify-center rounded-xl text-slate-100 disabled:opacity-50 cursor-pointer disabled:cursor-not-allowed transition-colors",
+                  recording
+                    ? "bg-rose-950/30 hover:bg-rose-900/30"
+                    : "bg-slate-800/40 hover:bg-slate-800/70",
+                ].join(" ")}
+                title={recording ? "Stop recording" : "Voice input"}
+              >
+                {recording ? <Square size={19} /> : <Mic size={19} />}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => (recording ? stopRecording() : void sendMessage())}
+                disabled={!canSend || loading || transcribing}
+                className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-slate-800/70 text-slate-100 hover:bg-slate-700/80 transition-colors disabled:opacity-50 cursor-pointer disabled:cursor-not-allowed"
+                title={recording ? "Stop recording" : "Send"}
+              >
+                <Send size={19} />
+              </button>
+            </div>
           </div>
+
           {transcribing ? <span className="mt-2 inline-block text-xs text-blue-300">Transcribing voice...</span> : null}
+          {recording ? (
+            <span className="mt-2 inline-block text-xs text-rose-200">
+              Recording {recordPaused ? "(paused)" : "…"} {formatTime(recordSeconds)}
+            </span>
+          ) : null}
         </div>
 
         <details className="mt-3 rounded-xl border border-slate-800 bg-slate-950/25 p-3">
@@ -922,7 +1092,7 @@ export function Form({ sessionId }: FormProps) {
             </div>
             <div className="flex flex-wrap gap-2">
               <button
-                className="rounded-lg border border-slate-700 bg-transparent px-3 py-2 text-sm text-slate-200 hover:bg-slate-900/40 disabled:opacity-60"
+                className={actionButtonClass({ disabled: loading, tone: "secondary" })}
                 type="button"
                 onClick={saveEditedDraft}
                 disabled={loading}
@@ -930,10 +1100,10 @@ export function Form({ sessionId }: FormProps) {
                 Save Edited Draft
               </button>
               <button
-                className="rounded-lg border border-slate-700 bg-slate-900/40 px-3 py-2 text-sm text-slate-100 hover:bg-slate-900/70 disabled:opacity-60"
+                className={actionButtonClass({ disabled: loading, tone: "primary" })}
                 type="button"
                 onClick={generateFullListing}
-                disabled={loading}
+                disabled={loading || isPublishing}
               >
                 Generate Full Listing
               </button>
@@ -956,17 +1126,33 @@ export function Form({ sessionId }: FormProps) {
         />
         <section className="mt-4 rounded-2xl border border-slate-700/70 bg-slate-900/30 p-4">
           <h3 className="text-sm font-semibold text-slate-100">Publish</h3>
-          <p className="mt-1 text-xs text-slate-400">
-            Кнопка активна только если buildPublishPayload проходит и у каждого фото заполнен alt, выбран coverImage.
-          </p>
-          <button
-            className="mt-3 rounded-lg border border-slate-700 bg-slate-900/50 px-3 py-2 text-sm font-medium text-slate-100 hover:bg-slate-900/80 disabled:opacity-60"
-            type="button"
-            onClick={publish}
-            disabled={!publishGate.ok || loading || galleryAltIssues > 0}
-          >
-            Publish Listing
-          </button>
+          <p className="mt-1 text-xs text-slate-400">Draft: доступно если форма не пустая. Property: только при проходе реального publish gate + alt у всех фото.</p>
+
+          {isGenerating ? (
+            <div className="mt-3 flex items-center gap-2 rounded-lg border border-slate-800 bg-slate-950/30 px-3 py-2 text-xs text-slate-200">
+              <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-slate-400/40 border-t-slate-100" />
+              <span>{loadingStep ?? "AI is thinking..."}</span>
+            </div>
+          ) : null}
+
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button
+              className={actionButtonClass({ disabled: !canDraftPublish || loading || isGenerating || isPublishing, tone: "secondary" })}
+              type="button"
+              onClick={() => void publishAsDraft()}
+              disabled={!canDraftPublish || loading || isGenerating || isPublishing}
+            >
+              Publish as draft
+            </button>
+            <button
+              className={actionButtonClass({ disabled: !canPropertyPublish || loading || isGenerating || isPublishing, tone: "primary" })}
+              type="button"
+              onClick={() => void publishAsProperty()}
+              disabled={!canPropertyPublish || loading || isGenerating || isPublishing}
+            >
+              Publish as property
+            </button>
+          </div>
           {!publishGate.ok ? (
             <div className="mt-2 text-xs text-rose-300">
               {publishGate.errors.missing.length ? <p>Не хватает: {publishGate.errors.missing.join(", ")}</p> : null}

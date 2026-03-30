@@ -113,7 +113,7 @@ export function ListingComposer({ sessionId, value, onChange }: ListingComposerP
         </label>
         <button
           className={[
-            "inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-sm disabled:opacity-60",
+            "inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-sm disabled:opacity-60 cursor-pointer disabled:cursor-not-allowed",
             recording
               ? "border-rose-700/70 bg-rose-950/30 text-rose-100 hover:bg-rose-900/30"
               : "border-slate-700 bg-slate-900/50 text-slate-100 hover:bg-slate-900/80",

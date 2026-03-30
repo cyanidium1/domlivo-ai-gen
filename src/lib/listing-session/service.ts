@@ -490,7 +490,7 @@ export async function generateListingDraft(id: string) {
   }
 }
 
-export async function publishListingSession(id: string) {
+async function publishListingSessionInternal(id: string, mode: "draft" | "property") {
   const session = await prisma.listingSession.findUnique({ where: { id }, include: sessionWithAssetsInclude });
   if (!session) {
     throw new AppError("NOT_FOUND", "Session not found", 404);
@@ -511,13 +511,28 @@ export async function publishListingSession(id: string) {
   });
 
   try {
+    console.info(
+      "[publish][service] submit",
+      JSON.stringify({
+        sessionId: id,
+        mode,
+        existingSanityDocumentId: session.sanityDocumentId ?? null,
+        payloadInternalRef: gate.payload.internalRef,
+        galleryItems: gate.payload.gallery.length,
+      }),
+    );
     const publisher = getListingPublisher();
-    const published = await publisher.publish({ sessionId: id, payload: gate.payload });
+    const published = await publisher.publish({
+      sessionId: id,
+      payload: gate.payload,
+      mode,
+      existingSanityDocumentId: session.sanityDocumentId,
+    });
     return prisma.listingSession.update({
       where: { id },
       data: {
         sanityDocumentId: published.sanityDocumentId,
-        status: "published",
+        status: mode === "property" ? "published" : "editing",
       },
     });
   } catch (error) {
@@ -527,4 +542,12 @@ export async function publishListingSession(id: string) {
     }
     throw new AppError("PUBLISH_FAILED", "Failed to publish listing", 500);
   }
+}
+
+export async function publishListingSession(id: string) {
+  return publishListingSessionInternal(id, "property");
+}
+
+export async function publishListingSessionDraft(id: string) {
+  return publishListingSessionInternal(id, "draft");
 }

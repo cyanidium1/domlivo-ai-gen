@@ -1,0 +1,63 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum ListingSessionStatus {
+  collecting
+  processing
+  ready
+  editing
+  publishing
+  published
+  failed
+}
+
+enum SessionAssetKind {
+  photo
+  audio
+}
+
+enum SessionAssetStatus {
+  uploaded
+  processed
+  deleted
+}
+
+model ListingSession {
+  id               String         @id @default(cuid())
+  agentId          String
+  status           ListingSessionStatus
+  sourceText       String?
+  transcript       String?
+  extractedFacts   Json?
+  generatedDraft   Json?
+  editedDraft      Json?
+  confirmation     Json?
+  sanityDocumentId String?
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+  expiresAt        DateTime
+  assets           SessionAsset[]
+}
+
+model SessionAsset {
+  id         String         @id @default(cuid())
+  sessionId  String
+  kind       SessionAssetKind
+  storageKey String
+  fileName   String
+  mimeType   String
+  size       Int
+  sortOrder  Int
+  status     SessionAssetStatus
+  createdAt  DateTime       @default(now())
+
+  session ListingSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId])
+}

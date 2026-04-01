@@ -10,6 +10,8 @@
     "ai:intake:debug": "tsx scripts/ai-intake-debug.ts",
     "ai:intake:debug:all": "tsx scripts/ai-intake-debug.ts --case all --stage both",
     "sanity:persistence:debug": "tsx scripts/sanity-persistence-debug.ts",
+    "sanity:debug:listing": "tsx scripts/debug/debug-sanity-listing.ts",
+    "sanity:debug:app-path": "tsx scripts/debug/debug-app-publish-path.ts",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev"
   },

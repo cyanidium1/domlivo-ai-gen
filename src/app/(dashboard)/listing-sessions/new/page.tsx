@@ -3,10 +3,11 @@
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { ContentCard } from "@/components/dashboard/ContentCard";
-import styles from "@/components/dashboard/dashboard.module.css";
+import { useSettings } from "@/contexts/settings-context";
 
 export default function NewListingSessionPage() {
   const router = useRouter();
+  const { t } = useSettings();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -21,28 +22,33 @@ export default function NewListingSessionPage() {
       });
 
       if (!response.ok) {
-        throw new Error("Failed to create session");
+        throw new Error(t.dashboard.createSessionError);
       }
 
       const data = await response.json();
       router.push(`/listing-sessions/${data.id}`);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to create session");
+      setError(err instanceof Error ? err.message : t.dashboard.createSessionError);
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <div className={styles.stack}>
+    <div className="grid gap-4">
       <ContentCard
-        title="Create New Listing Session"
-        subtitle="Start a new intake workspace for photos, audio, source notes, draft generation, and publish."
+        title={t.dashboard.createSessionTitle}
+        subtitle={t.dashboard.createSessionSubtitle}
       >
-        <button className={styles.button} type="button" onClick={createSession} disabled={loading}>
-          {loading ? "Creating..." : "Create session"}
+        <button
+          className="inline-flex cursor-pointer items-center rounded-xl border border-[var(--app-border)] bg-[var(--panel-bg)] px-4 py-2 text-sm font-medium text-[var(--app-fg)] transition-colors hover:bg-[var(--panel-hover)] disabled:cursor-not-allowed disabled:opacity-60"
+          type="button"
+          onClick={createSession}
+          disabled={loading}
+        >
+          {loading ? t.dashboard.creatingSession : t.dashboard.createSessionButton}
         </button>
-        {error && <p style={{ color: "#f4a6a6" }}>{error}</p>}
+        {error ? <p className="mt-2 text-sm text-rose-300">{error}</p> : null}
       </ContentCard>
     </div>
   );

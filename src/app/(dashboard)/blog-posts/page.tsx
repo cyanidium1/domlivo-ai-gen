@@ -1,10 +1,15 @@
+"use client";
+
 import { EmptyState } from "@/components/dashboard/EmptyState";
+import { useSettings } from "@/contexts/settings-context";
 
 export default function BlogPostsPage() {
+  const { t } = useSettings();
+
   return (
     <EmptyState
-      title="Blog Posts"
-      description="This section is prepared for stage 3. CRUD for blog posts is not implemented yet."
+      title={t.dashboard.blogPlaceholderTitle}
+      description={t.dashboard.blogPlaceholderDescription}
     />
   );
 }

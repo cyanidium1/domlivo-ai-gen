@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { ListingPreviewAdvantages } from "@/components/listing-preview/ListingPreviewAdvantages";
 import { ListingPreviewLocaleTabs } from "@/components/listing-preview/ListingPreviewLocaleTabs";
@@ -15,6 +15,7 @@ import {
 import { evaluatePublishReadiness } from "@/lib/listing-session/readiness";
 import type { ListingDraft } from "@/lib/validation/listing-session";
 import { withEnglishFallback } from "@/lib/validation/property-i18n";
+import { useAppLanguage, type AppLanguage } from "@/contexts/language-context";
 
 type Props = {
   session: ListingSessionResponse | null;
@@ -27,6 +28,39 @@ type Props = {
   onRemoveUploadedImage?: (assetId: string) => Promise<void>;
 };
 
+const PREVIEW_UI: Record<
+  string,
+  Record<AppLanguage, string>
+> = {
+  schemaPreview: { en: "Schema preview", ru: "Предпросмотр схемы", uk: "Попередній перегляд схеми", sq: "Parapamje e skemës", it: "Anteprima schema" },
+  schemaSubtitle: {
+    en: "Draft schema — no placeholder substitutions.",
+    ru: "Схема черновика — без placeholder-подстановок.",
+    uk: "Схема чернетки — без підстановок placeholder.",
+    sq: "Skema e draftit — pa zëvendësime placeholder.",
+    it: "Schema bozza — senza sostituzioni placeholder.",
+  },
+  ready: { en: "Ready", ru: "Готово", uk: "Готово", sq: "Gati", it: "Pronto" },
+  notReady: { en: "Not ready", ru: "Не готово", uk: "Не готово", sq: "Jo gati", it: "Non pronto" },
+  listingSchema: { en: "Listing (schema)", ru: "Листинг (схема)", uk: "Лістинг (схема)", sq: "Listimi (skemë)", it: "Listing (schema)" },
+  fallbackNotice: {
+    en: "No text for {locale} — EN fallback is shown below.",
+    ru: "Нет текста для {locale} — ниже показан fallback из EN.",
+    uk: "Немає тексту для {locale} — нижче показано fallback з EN.",
+    sq: "Nuk ka tekst për {locale} — më poshtë shfaqet fallback nga EN.",
+    it: "Nessun testo per {locale} — sotto viene mostrato il fallback EN.",
+  },
+  gallery: { en: "Gallery", ru: "Галерея", uk: "Галерея", sq: "Galeri", it: "Galleria" },
+  removePhoto: { en: "Remove photo", ru: "Удалить фото", uk: "Видалити фото", sq: "Hiq foton", it: "Rimuovi foto" },
+  galleryEmpty: {
+    en: "Gallery is empty — upload at least one photo.",
+    ru: "Галерея пуста — загрузите хотя бы одно фото.",
+    uk: "Галерея порожня — завантажте хоча б одне фото.",
+    sq: "Galeria është bosh — ngarkoni të paktën një foto.",
+    it: "Galleria vuota — carica almeno una foto.",
+  },
+};
+
 export function ListingPreviewPanel({
   session,
   previewDraft,
@@ -36,8 +70,19 @@ export function ListingPreviewPanel({
   onRemovePendingImage,
   onRemoveUploadedImage,
 }: Props) {
+  const { appLanguage } = useAppLanguage();
   const [locale, setLocale] = useState<PreviewLocale>("EN");
   const localeKey = locale.toLowerCase() as "en" | "uk" | "ru" | "sq" | "it";
+
+  useEffect(() => {
+    if (process.env.NODE_ENV !== "development") return;
+    const d = previewDraft;
+    console.log("[preview-panel] PREVIEW DRAFT", d);
+    if (!d) return;
+    console.log("[preview-panel] Object.keys title", Object.keys(d.title ?? {}));
+    console.log("[preview-panel] Object.keys shortDescription", Object.keys(d.shortDescription ?? {}));
+    console.log("[preview-panel] Object.keys description", Object.keys(d.description ?? {}));
+  }, [previewDraft]);
 
   const full = useMemo(
     () => mapSessionToFullPreview({ session, draft: previewDraft, locale, pendingImages }),
@@ -61,8 +106,8 @@ export function ListingPreviewPanel({
       <div className="flex flex-col gap-2 min-w-0">
         <div className="flex items-start justify-between gap-2 min-w-0">
           <div className="min-w-0">
-            <div className="text-sm font-semibold text-slate-100">Schema preview</div>
-            <div className="text-xs text-slate-400 mt-0.5">Draft schema — no placeholder substitutions.</div>
+            <div className="text-sm font-semibold text-[var(--app-fg)]">{PREVIEW_UI.schemaPreview[appLanguage]}</div>
+            <div className="mt-0.5 text-xs text-[var(--muted-fg)]">{PREVIEW_UI.schemaSubtitle[appLanguage]}</div>
           </div>
           <span
             className={`flex-shrink-0 inline-flex rounded-full border px-2 py-1 text-[11px] whitespace-nowrap ${
@@ -71,17 +116,17 @@ export function ListingPreviewPanel({
                 : "border-amber-700/60 text-amber-200 bg-amber-950/20"
             }`}
           >
-            {readiness.isReady ? "Ready" : "Not ready"}
+            {readiness.isReady ? PREVIEW_UI.ready[appLanguage] : PREVIEW_UI.notReady[appLanguage]}
           </span>
         </div>
         <ListingPreviewLocaleTabs value={locale} onChange={setLocale} />
       </div>
 
-      <section className="rounded-2xl border border-slate-700/70 bg-slate-900/30 p-4 min-w-0 overflow-hidden">
-        <div className="mb-3 text-sm font-semibold text-slate-100">Listing (схема)</div>
+      <section className="min-w-0 overflow-hidden rounded-2xl border border-[var(--app-border)] bg-[var(--panel-bg)]/70 p-4">
+        <div className="mb-3 text-sm font-semibold text-[var(--app-fg)]">{PREVIEW_UI.listingSchema[appLanguage]}</div>
         {full.isLocaleFallback ? (
-          <div className="mb-3 inline-flex rounded-full border border-slate-700 bg-slate-950/40 px-2 py-1 text-[11px] text-slate-300">
-            Нет текста для {locale} — показан fallback через EN в описании ниже
+          <div className="mb-3 inline-flex rounded-full border border-[var(--app-border)] bg-[var(--content-bg)] px-2 py-1 text-[11px] text-[var(--muted-fg)]">
+            {PREVIEW_UI.fallbackNotice[appLanguage].replace("{locale}", locale)}
           </div>
         ) : null}
 
@@ -89,7 +134,7 @@ export function ListingPreviewPanel({
 
         {full.images.length ? (
           <div className="mt-3 min-w-0">
-            <div className="mb-2 text-[11px] uppercase tracking-wide text-slate-400">Gallery</div>
+            <div className="mb-2 text-[11px] uppercase tracking-wide text-[var(--muted-fg)]">{PREVIEW_UI.gallery[appLanguage]}</div>
             <div className="flex gap-2 overflow-x-auto pb-2">
               {full.images.map((img) => (
                 <div
@@ -112,7 +157,7 @@ export function ListingPreviewPanel({
                         void onRemoveUploadedImage?.(img.assetId);
                       }
                     }}
-                    aria-label="Remove photo"
+                    aria-label={PREVIEW_UI.removePhoto[appLanguage]}
                   >
                     ×
                   </button>
@@ -129,7 +174,7 @@ export function ListingPreviewPanel({
             </ul>
           </div>
         ) : (
-          <p className="mt-2 text-sm text-slate-400">Галерея пуста — загрузите хотя бы одно фото.</p>
+          <p className="mt-2 text-sm text-[var(--muted-fg)]">{PREVIEW_UI.galleryEmpty[appLanguage]}</p>
         )}
 
         <div className="mt-4 space-y-1">

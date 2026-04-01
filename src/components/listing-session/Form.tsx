@@ -6,10 +6,12 @@ import type { KeyboardEvent } from "react";
 
 import { ListingPreviewPanel } from "@/components/listing-preview/ListingPreviewPanel";
 import {
+  conversationalEdit,
   generateSession,
   getSession,
   isPublishGateErrors,
   patchSession,
+  publishDraftSession,
   publishSession,
   removePhoto,
   runIntake,
@@ -19,6 +21,7 @@ import {
   type IntakeAnalysisResponse,
   type ListingSessionResponse,
 } from "@/lib/listing-session/client";
+import { detectInputLanguage } from "@/lib/detection/language-detector";
 import {
   createBaseDraftFromFacts,
   emptyDraftForm,
@@ -41,6 +44,7 @@ import { useAppLanguage, type AppLanguage } from "@/contexts/language-context";
 import { toast } from "sonner";
 import { actionButtonClass, canPublishDraft, canPublishProperty } from "@/lib/listing-session/publish-eligibility";
 import { canSendMessage } from "@/lib/listing-session/composer-logic";
+import { listingDraftSchema } from "@/lib/validation/listing-session";
 
 type FormProps = {
   sessionId: string;
@@ -98,6 +102,89 @@ const INTAKE_MESSAGES: Record<IntakeMsgKey, Record<AppLanguage, string>> = {
     it: "Chiarisci i dettagli mancanti.",
   },
 };
+
+const TOAST_MESSAGES = {
+  analysisStarted: { en: "Analyzing…", ru: "Анализ начался…", uk: "Аналіз розпочався…", sq: "Analizoj…", it: "Analisi in corso…" },
+  analysisComplete: { en: "Done", ru: "Готово", uk: "Готово", sq: "Gati", it: "Fatto" },
+  photoOnly: {
+    en: "Photos uploaded. Type a message to run analysis and generate the listing.",
+    ru: "Фото загружены. Напишите сообщение для анализа и генерации листинга.",
+    uk: "Фото завантажено. Напишіть повідомлення для аналізу та генерації лістингу.",
+    sq: "Fotot u ngarkuan. Shkruani një mesazh për të analizuar dhe gjeneruar listimin.",
+    it: "Foto caricate. Scrivi un messaggio per analizzare e generare l'annuncio.",
+  },
+  draftSaving: { en: "Saving draft…", ru: "Сохранение черновика…", uk: "Збереження чернетки…", sq: "Po ruaj draftin…", it: "Salvataggio bozza…" },
+  draftSavedSanity: { en: "Draft saved to Sanity", ru: "Черновик опубликован в Sanity", uk: "Чернетку збережено в Sanity", sq: "Drafti u ruajt në Sanity", it: "Bozza salvata in Sanity" },
+  draftSavedLocal: { en: "Draft saved locally (complete listing to publish to Sanity)", ru: "Черновик сохранён локально (заполните листинг для публикации в Sanity)", uk: "Чернетку збережено локально (заповніть лістинг для публікації в Sanity)", sq: "Drafti u ruajt lokalisht (plotësoni listimin për ta publikuar në Sanity)", it: "Bozza salvata localmente (completa l'annuncio per pubblicare in Sanity)" },
+  publishingProperty: { en: "Publishing…", ru: "Публикация объекта…", uk: "Публікація об'єкта…", sq: "Po publikoj…", it: "Pubblicazione in corso…" },
+  publishedProperty: { en: "Published", ru: "Объект опубликован", uk: "Об'єкт опубліковано", sq: "U publikua", it: "Pubblicato" },
+  genStarted: { en: "Generating…", ru: "Генерация началась…", uk: "Генерація розпочалась…", sq: "Po gjeneroj…", it: "Generazione in corso…" },
+  genComplete: { en: "Generated", ru: "Генерация завершена", uk: "Генерацію завершено", sq: "U gjenerua", it: "Generato" },
+  editApplied: { en: "Edit applied", ru: "Изменение применено", uk: "Зміну застосовано", sq: "Ndryshimi u aplikua", it: "Modifica applicata" },
+} satisfies Record<string, Record<AppLanguage, string>>;
+
+const UI_TEXT = {
+  loadingAnalyzing: {
+    en: "Analyzing listing...",
+    ru: "Анализ листинга...",
+    uk: "Аналіз лістингу...",
+    sq: "Po analizoj listimin...",
+    it: "Analisi annuncio...",
+  },
+  loadingGeneratingFull: {
+    en: "Generating full listing...",
+    ru: "Генерация полного листинга...",
+    uk: "Генерація повного лістингу...",
+    sq: "Po gjeneroj listimin e plotë...",
+    it: "Generazione annuncio completo...",
+  },
+  loadingUpdatingPhotos: {
+    en: "Updating draft with photos...",
+    ru: "Обновление черновика с фото...",
+    uk: "Оновлення чернетки з фото...",
+    sq: "Po përditësoj draftin me foto...",
+    it: "Aggiornamento bozza con foto...",
+  },
+  loadingApplyingEdit: {
+    en: "Applying edit...",
+    ru: "Применение правок...",
+    uk: "Застосування змін...",
+    sq: "Po aplikoj ndryshimet...",
+    it: "Applicazione modifiche...",
+  },
+  loadingGeneratingDraft: {
+    en: "Generating draft...",
+    ru: "Генерация черновика...",
+    uk: "Генерація чернетки...",
+    sq: "Po gjeneroj draftin...",
+    it: "Generazione bozza...",
+  },
+  chatTitle: {
+    en: "AI Agent Intake Chat",
+    ru: "Чат AI Agent Intake",
+    uk: "Чат AI Agent Intake",
+    sq: "Biseda AI Agent Intake",
+    it: "Chat Intake AI Agent",
+  },
+  remove: { en: "Remove", ru: "Удалить", uk: "Видалити", sq: "Hiq", it: "Rimuovi" },
+  attachPhotos: { en: "Attach photos", ru: "Прикрепить фото", uk: "Додати фото", sq: "Shto foto", it: "Allega foto" },
+  messagePlaceholder: {
+    en: "Message Domlivo AI Agent…",
+    ru: "Сообщение Domlivo AI Agent…",
+    uk: "Повідомлення Domlivo AI Agent…",
+    sq: "Mesazh për Domlivo AI Agent…",
+    it: "Messaggio a Domlivo AI Agent…",
+  },
+  resumeRecording: { en: "Resume recording", ru: "Продолжить запись", uk: "Продовжити запис", sq: "Vazhdo regjistrimin", it: "Riprendi registrazione" },
+  pauseRecording: { en: "Pause recording", ru: "Пауза записи", uk: "Пауза запису", sq: "Ndalo përkohësisht", it: "Metti in pausa" },
+  stopRecording: { en: "Stop recording", ru: "Остановить запись", uk: "Зупинити запис", sq: "Ndalo regjistrimin", it: "Ferma registrazione" },
+  voiceInput: { en: "Voice input", ru: "Голосовой ввод", uk: "Голосовий ввід", sq: "Hyrje zanore", it: "Input vocale" },
+  send: { en: "Send", ru: "Отправить", uk: "Надіслати", sq: "Dërgo", it: "Invia" },
+  transcribing: { en: "Transcribing voice...", ru: "Расшифровка голоса...", uk: "Транскрипція голосу...", sq: "Po transkriptoj zërin...", it: "Trascrizione voce..." },
+  recording: { en: "Recording", ru: "Запись", uk: "Запис", sq: "Regjistrim", it: "Registrazione" },
+  paused: { en: "(paused)", ru: "(пауза)", uk: "(пауза)", sq: "(pauzë)", it: "(pausa)" },
+  advancedEdit: { en: "Advanced Edit", ru: "Расширенное редактирование", uk: "Розширене редагування", sq: "Ndryshim i avancuar", it: "Modifica avanzata" },
+} satisfies Record<string, Record<AppLanguage, string>>;
 
 const FIELD_LABELS: Record<string, Record<AppLanguage, string>> = {
   price: { en: "price (EUR)", ru: "цена (EUR)", uk: "ціна (EUR)", sq: "çmim (EUR)", it: "prezzo (EUR)" },
@@ -168,6 +255,78 @@ function formatTime(seconds: number) {
   const mins = Math.floor(seconds / 60);
   const secs = seconds % 60;
   return `${String(mins).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
+}
+
+function hasUsableDraft(draft: ListingDraft | null | undefined) {
+  const parsed = listingDraftSchema.safeParse(draft);
+  if (!parsed.success) return false;
+  const value = parsed.data;
+  const locales = ["en", "ru", "uk", "sq", "it"] as const;
+  const hasTitle = locales.some((locale) => (value.title?.[locale] ?? "").trim().length > 0);
+  const hasShort = locales.some((locale) => (value.shortDescription?.[locale] ?? "").trim().length > 0);
+  const hasDescription = locales.some((locale) => (value.description?.[locale] ?? "").trim().length > 0);
+  // Partial intake drafts are schema-valid but content-empty; they must not trigger conversational edit mode.
+  return hasTitle && (hasShort || hasDescription);
+}
+
+function localizedContentScore(draft: ListingDraft | null | undefined) {
+  if (!draft) return 0;
+  const locales = ["en", "ru", "uk", "sq", "it"] as const;
+  let score = 0;
+  for (const locale of locales) {
+    if ((draft.title?.[locale] ?? "").trim()) score += 1;
+    if ((draft.shortDescription?.[locale] ?? "").trim()) score += 1;
+    if ((draft.description?.[locale] ?? "").trim()) score += 1;
+  }
+  return score;
+}
+
+function pickBestDraft(session: ListingSessionResponse | null | undefined, sessionId: string): ListingDraft | null {
+  if (!session) return null;
+  const edited = session.editedDraft;
+  const generated = session.generatedDraft;
+  if (edited && generated) {
+    const editedScore = localizedContentScore(edited);
+    const generatedScore = localizedContentScore(generated);
+    if (generatedScore > editedScore) {
+      console.info("[ui][draft] using generatedDraft for preview", {
+        sessionId,
+        editedScore,
+        generatedScore,
+      });
+      return generated;
+    }
+    return edited;
+  }
+  return edited ?? generated ?? createBaseDraftFromFacts(sessionId, session.extractedFacts);
+}
+
+/**
+ * Picks the draft with the richest multilingual title/shortDescription/description.
+ * On ties, prefers generatedDraft (canonical AI output) over session edited, then base, then form-composed.
+ */
+function pickDraftWithMaxLocalizedContent(
+  candidates: Array<{ draft: ListingDraft | null; tieBreak: number }>,
+): ListingDraft | null {
+  let best: ListingDraft | null = null;
+  let bestScore = -1;
+  let bestTie = 999;
+  for (const { draft, tieBreak } of candidates) {
+    if (!draft) continue;
+    const s = localizedContentScore(draft);
+    if (s > bestScore || (s === bestScore && tieBreak < bestTie)) {
+      bestScore = s;
+      best = draft;
+      bestTie = tieBreak;
+    }
+  }
+  return best;
+}
+
+function hasNoDraftError(err: unknown) {
+  if (!(err instanceof Error)) return false;
+  const api = err as { code?: string };
+  return api.code === "NO_DRAFT" || err.message.toLowerCase().includes("no valid draft to edit");
 }
 
 export function Form({ sessionId }: FormProps) {
@@ -265,13 +424,54 @@ export function Form({ sessionId }: FormProps) {
 
   const baseForDraft = useMemo((): ListingDraft | null => {
     if (!session) return null;
-    return session.editedDraft ?? session.generatedDraft ?? createBaseDraftFromFacts(sessionId, session.extractedFacts);
+    return pickBestDraft(session, sessionId);
   }, [session, sessionId]);
 
   const effectiveEditedDraft = useMemo((): ListingDraft | null => {
     if (!baseForDraft) return null;
     return hydrateGalleryFromAssets(toListingDraft(draft, baseForDraft));
   }, [draft, baseForDraft, photoAssets]);
+
+  const previewDraft = useMemo((): ListingDraft | null => {
+    if (!session && !effectiveEditedDraft) return null;
+    const hydratedGen = session?.generatedDraft ? hydrateGalleryFromAssets(session.generatedDraft) : null;
+    const hydratedSessionEdited = session?.editedDraft ? hydrateGalleryFromAssets(session.editedDraft) : null;
+    const best = pickDraftWithMaxLocalizedContent([
+      { draft: hydratedGen, tieBreak: 0 },
+      { draft: hydratedSessionEdited, tieBreak: 1 },
+      { draft: baseForDraft, tieBreak: 2 },
+      { draft: effectiveEditedDraft, tieBreak: 3 },
+    ]);
+    if (!best) return effectiveEditedDraft;
+    if (effectiveEditedDraft && best !== effectiveEditedDraft) {
+      return {
+        ...best,
+        gallery: effectiveEditedDraft.gallery,
+        coverImage: effectiveEditedDraft.coverImage ?? best.coverImage,
+      };
+    }
+    return best;
+  }, [session, baseForDraft, effectiveEditedDraft, photoAssets, draft]);
+
+  useEffect(() => {
+    if (process.env.NODE_ENV !== "development") return;
+    const logKeys = (label: string, d: ListingDraft | null | undefined) => {
+      if (!d) {
+        console.log(`[preview-bind] ${label}: null`);
+        return;
+      }
+      console.log(`[preview-bind] ${label} score=${localizedContentScore(d)}`, {
+        title: Object.keys(d.title ?? {}),
+        shortDescription: Object.keys(d.shortDescription ?? {}),
+        description: Object.keys(d.description ?? {}),
+      });
+    };
+    logKeys("session.generatedDraft", session?.generatedDraft ?? undefined);
+    logKeys("session.editedDraft", session?.editedDraft ?? undefined);
+    logKeys("baseForDraft", baseForDraft ?? undefined);
+    logKeys("effectiveEditedDraft", effectiveEditedDraft ?? undefined);
+    logKeys("previewDraft (passed to panel)", previewDraft ?? undefined);
+  }, [session?.generatedDraft, session?.editedDraft, baseForDraft, effectiveEditedDraft, previewDraft]);
 
   const publishGate = useMemo(() => {
     if (!session || !effectiveEditedDraft) {
@@ -432,9 +632,9 @@ export function Form({ sessionId }: FormProps) {
   const generateFullListing = async () => {
     setLoading(true);
     setIsGenerating(true);
-    setLoadingStep("Analyzing listing...");
+    setLoadingStep(UI_TEXT.loadingAnalyzing[appLanguage]);
     setError(null);
-    toast.loading("Генерация началась…", { id: `gen-${sessionId}` });
+    toast.loading(TOAST_MESSAGES.genStarted[appLanguage], { id: `gen-${sessionId}` });
     try {
       await uploadPendingPhotosIfAny();
       await patchSession(sessionId, { sourceText });
@@ -449,20 +649,20 @@ export function Form({ sessionId }: FormProps) {
       if (!stageA.intake.isReadyForDraft) {
         throw new Error("Complete required facts in AI questions before full draft generation.");
       }
-      setLoadingStep("Generating full listing...");
+      setLoadingStep(UI_TEXT.loadingGeneratingFull[appLanguage]);
       await generateSession(sessionId);
       await loadSession();
       appendMessage({
         id: makeId("assistant"),
         role: "assistant",
-        content: "Full listing generated. Review preview and proceed to publish.",
+        content: INTAKE_MESSAGES.draftGenerated[appLanguage],
       });
-      toast.success("Генерация завершена", { id: `gen-${sessionId}` });
+      toast.success(TOAST_MESSAGES.genComplete[appLanguage], { id: `gen-${sessionId}` });
     } catch (err) {
       const message = err instanceof Error ? err.message : "Full draft generation failed";
       setError(message);
       appendMessage({ id: makeId("system"), role: "system", content: message });
-      toast.error(`Ошибка генерации: ${message}`, { id: `gen-${sessionId}` });
+      toast.error(message, { id: `gen-${sessionId}` });
     } finally {
       setLoadingStep(null);
       setLoading(false);
@@ -491,15 +691,22 @@ export function Form({ sessionId }: FormProps) {
     setIsPublishing(true);
     setLoading(true);
     setError(null);
-    toast.loading("Сохранение черновика…", { id: `pub-draft-${sessionId}` });
+    toast.loading(TOAST_MESSAGES.draftSaving[appLanguage], { id: `pub-draft-${sessionId}` });
     try {
       await saveEditedDraft();
+      const result = await publishDraftSession(sessionId);
       await loadSession();
-      toast.success("Черновик сохранён", { id: `pub-draft-${sessionId}` });
+      if (result.persistedToSanity) {
+        toast.success(TOAST_MESSAGES.draftSavedSanity[appLanguage], { id: `pub-draft-${sessionId}` });
+      } else {
+        toast.success(TOAST_MESSAGES.draftSavedLocal[appLanguage], {
+          id: `pub-draft-${sessionId}`,
+        });
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : "Draft publish failed";
       setError(message);
-      toast.error(`Ошибка сохранения черновика: ${message}`, { id: `pub-draft-${sessionId}` });
+      toast.error(message, { id: `pub-draft-${sessionId}` });
     } finally {
       setLoading(false);
       setIsPublishing(false);
@@ -516,11 +723,11 @@ export function Form({ sessionId }: FormProps) {
     setIsPublishing(true);
     setLoading(true);
     setError(null);
-    toast.loading("Публикация объекта…", { id: `pub-prop-${sessionId}` });
+    toast.loading(TOAST_MESSAGES.publishingProperty[appLanguage], { id: `pub-prop-${sessionId}` });
     try {
       await publishSession(sessionId);
       await loadSession();
-      toast.success("Объект опубликован", { id: `pub-prop-${sessionId}` });
+      toast.success(TOAST_MESSAGES.publishedProperty[appLanguage], { id: `pub-prop-${sessionId}` });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Publish failed");
       const details = (err as ApiErrorWithDetails | null)?.details;
@@ -528,7 +735,7 @@ export function Form({ sessionId }: FormProps) {
         setPublishErrors(details);
       }
       const msg = err instanceof Error ? err.message : "Publish failed";
-      toast.error(`Ошибка публикации: ${msg}`, { id: `pub-prop-${sessionId}` });
+      toast.error(msg, { id: `pub-prop-${sessionId}` });
     } finally {
       setLoading(false);
       setIsPublishing(false);
@@ -619,27 +826,65 @@ export function Form({ sessionId }: FormProps) {
     setIsGenerating(true);
     setError(null);
     setLoadingStep(null);
-    toast.loading("Анализ начался…", { id: `gen-${sessionId}` });
+    toast.loading(TOAST_MESSAGES.analysisStarted[appLanguage], { id: `gen-${sessionId}` });
 
     try {
       await uploadPendingPhotosIfAny();
 
+      // Photos only + draft already exists → re-generate to include new photos
       if (!text) {
-        await loadSession();
-        appendMessage({
-          id: makeId("assistant"),
-          role: "assistant",
-          content: "Photos uploaded. Add details in the message box to run intake and generate the listing.",
-        });
-        toast.success("Фото загружены", { id: `gen-${sessionId}` });
+        const hasDraft = hasUsableDraft(session?.editedDraft) || hasUsableDraft(session?.generatedDraft);
+        if (hasDraft) {
+          setLoadingStep(UI_TEXT.loadingUpdatingPhotos[appLanguage]);
+          await generateSession(sessionId);
+          await loadSession();
+          appendMessage({
+            id: makeId("assistant"),
+            role: "assistant",
+            content: INTAKE_MESSAGES.draftGenerated[appLanguage],
+          });
+        } else {
+          await loadSession();
+          appendMessage({
+            id: makeId("assistant"),
+            role: "assistant",
+            content: TOAST_MESSAGES.photoOnly[appLanguage],
+          });
+        }
+        toast.success(TOAST_MESSAGES.analysisComplete[appLanguage], { id: `gen-${sessionId}` });
         return;
       }
 
+      // Conversational edit mode: only if a schema-valid draft exists.
+      const hasDraft = hasUsableDraft(session?.editedDraft) || hasUsableDraft(session?.generatedDraft);
+      if (hasDraft) {
+        try {
+          setLoadingStep(UI_TEXT.loadingApplyingEdit[appLanguage]);
+          const detectedLang = detectInputLanguage(text);
+          const editResult = await conversationalEdit(sessionId, text, detectedLang);
+          await loadSession();
+          appendMessage({
+            id: makeId("assistant"),
+            role: "assistant",
+            content: editResult.changeSummary,
+          });
+          toast.success(TOAST_MESSAGES.editApplied[appLanguage], { id: `gen-${sessionId}` });
+          return;
+        } catch (err) {
+          // Guardrail against client/server drift: continue intake instead of hard failing.
+          if (!hasNoDraftError(err)) {
+            throw err;
+          }
+          console.info("[ui][routing] conversational-edit returned NO_DRAFT, fallback to intake", { sessionId });
+        }
+      }
+
+      // Initial intake mode: no draft yet
       const merged = sourceText ? `${sourceText}\n${text}` : text;
       setSourceText(merged);
       await patchSession(sessionId, { sourceText: merged });
 
-      setLoadingStep("Analyzing listing...");
+      setLoadingStep(UI_TEXT.loadingAnalyzing[appLanguage]);
       const result = await runIntake(sessionId);
       // Batch session, draft form, and intake state together for consistent render.
       const newBase =
@@ -665,7 +910,7 @@ export function Form({ sessionId }: FormProps) {
       // Generate draft as soon as text facts are ready, even if photo is missing.
       const canGenerate = result.intake.isReadyForDraft || result.intake.isReadyForTextDraft;
       if (canGenerate && !result.session.generatedDraft) {
-        setLoadingStep("Generating draft...");
+        setLoadingStep(UI_TEXT.loadingGeneratingDraft[appLanguage]);
         await generateSession(sessionId);
         await loadSession();
         const photoMissing = !result.intake.isReadyForDraft && result.intake.isReadyForTextDraft;
@@ -677,12 +922,14 @@ export function Form({ sessionId }: FormProps) {
             : INTAKE_MESSAGES.draftGenerated[appLanguage],
         });
       }
-      toast.success("Анализ/генерация завершены", { id: `gen-${sessionId}` });
+      toast.success(TOAST_MESSAGES.analysisComplete[appLanguage], { id: `gen-${sessionId}` });
     } catch (err) {
       const message = err instanceof Error ? err.message : "Failed to send message";
       setError(message);
-      appendMessage({ id: makeId("system"), role: "system", content: message });
-      toast.error(`Ошибка: ${message}`, { id: `gen-${sessionId}` });
+      if (!hasNoDraftError(err)) {
+        appendMessage({ id: makeId("system"), role: "system", content: message });
+      }
+      toast.error(message, { id: `gen-${sessionId}` });
     } finally {
       setLoadingStep(null);
       setLoading(false);
@@ -762,11 +1009,11 @@ export function Form({ sessionId }: FormProps) {
 
   return (
     <div className="grid gap-4 lg:grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)]">
-      <section className="min-w-0 rounded-2xl border border-slate-700/70 bg-slate-900/30 p-4 lg:sticky lg:top-[84px] lg:max-h-[calc(100vh-104px)] lg:overflow-y-auto">
+      <section className="min-w-0 rounded-2xl border border-[var(--app-border)] bg-[var(--panel-bg)]/70 p-4 lg:sticky lg:top-[84px] lg:max-h-[calc(100vh-104px)] lg:overflow-y-auto">
         <div className="mb-3 flex items-center justify-between gap-2 flex-wrap">
-          <h3 className="text-sm font-semibold text-slate-100">AI Agent Intake Chat</h3>
+          <h3 className="text-sm font-semibold text-[var(--app-fg)]">{UI_TEXT.chatTitle[appLanguage]}</h3>
           <div className="flex items-center gap-2">
-            {loadingStep ? <span className="text-xs text-slate-400">{loadingStep}</span> : null}
+            {loadingStep ? <span className="text-xs text-[var(--muted-fg)]">{loadingStep}</span> : null}
           </div>
         </div>
 
@@ -814,7 +1061,7 @@ export function Form({ sessionId }: FormProps) {
                     type="button"
                     onClick={() => removePendingImage(img.key)}
                     className="absolute right-1 top-1 rounded-md bg-slate-950/70 px-1.5 py-0.5 text-[10px] text-slate-100 cursor-pointer"
-                    title="Remove"
+                    title={UI_TEXT.remove[appLanguage]}
                   >
                     ×
                   </button>
@@ -829,7 +1076,7 @@ export function Form({ sessionId }: FormProps) {
               onClick={onPickPhotos}
               disabled={loading || transcribing || recording}
               className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-slate-800/40 text-slate-100 hover:bg-slate-800/70 transition-colors disabled:opacity-50 cursor-pointer disabled:cursor-not-allowed"
-              title="Attach photos"
+              title={UI_TEXT.attachPhotos[appLanguage]}
             >
               <Plus size={19} />
             </button>
@@ -840,7 +1087,7 @@ export function Form({ sessionId }: FormProps) {
               value={composerText}
               onChange={(e) => setComposerText(e.target.value)}
               onKeyDown={onComposerKeyDown}
-              placeholder="Message Domlivo AI Agent…"
+              placeholder={UI_TEXT.messagePlaceholder[appLanguage]}
               rows={1}
             />
 
@@ -850,7 +1097,7 @@ export function Form({ sessionId }: FormProps) {
                   type="button"
                   onClick={togglePauseRecording}
                   className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-slate-800/40 text-slate-100 hover:bg-slate-800/70 transition-colors cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
-                  title={recordPaused ? "Resume recording" : "Pause recording"}
+                  title={recordPaused ? UI_TEXT.resumeRecording[appLanguage] : UI_TEXT.pauseRecording[appLanguage]}
                 >
                   {recordPaused ? <Play size={19} /> : <Pause size={19} />}
                 </button>
@@ -866,7 +1113,7 @@ export function Form({ sessionId }: FormProps) {
                     ? "bg-rose-950/30 hover:bg-rose-900/30"
                     : "bg-slate-800/40 hover:bg-slate-800/70",
                 ].join(" ")}
-                title={recording ? "Stop recording" : "Voice input"}
+                title={recording ? UI_TEXT.stopRecording[appLanguage] : UI_TEXT.voiceInput[appLanguage]}
               >
                 {recording ? <Square size={19} /> : <Mic size={19} />}
               </button>
@@ -876,23 +1123,23 @@ export function Form({ sessionId }: FormProps) {
                 onClick={() => (recording ? stopRecording() : void sendMessage())}
                 disabled={!canSend || loading || transcribing}
                 className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-slate-800/70 text-slate-100 hover:bg-slate-700/80 transition-colors disabled:opacity-50 cursor-pointer disabled:cursor-not-allowed"
-                title={recording ? "Stop recording" : "Send"}
+                title={recording ? UI_TEXT.stopRecording[appLanguage] : UI_TEXT.send[appLanguage]}
               >
                 <Send size={19} />
               </button>
             </div>
           </div>
 
-          {transcribing ? <span className="mt-2 inline-block text-xs text-blue-300">Transcribing voice...</span> : null}
+          {transcribing ? <span className="mt-2 inline-block text-xs text-blue-300">{UI_TEXT.transcribing[appLanguage]}</span> : null}
           {recording ? (
             <span className="mt-2 inline-block text-xs text-rose-200">
-              Recording {recordPaused ? "(paused)" : "…"} {formatTime(recordSeconds)}
+              {UI_TEXT.recording[appLanguage]} {recordPaused ? UI_TEXT.paused[appLanguage] : "…"} {formatTime(recordSeconds)}
             </span>
           ) : null}
         </div>
 
         <details className="mt-3 rounded-xl border border-slate-800 bg-slate-950/25 p-3">
-          <summary className="cursor-pointer text-sm font-medium text-slate-100">Advanced Edit</summary>
+          <summary className="cursor-pointer text-sm font-medium text-slate-100">{UI_TEXT.advancedEdit[appLanguage]}</summary>
           <div className="mt-3 grid gap-3">
             <input
               className="w-full rounded-lg border border-slate-700 bg-slate-950/40 px-3 py-2 text-sm text-slate-100"
@@ -1117,7 +1364,7 @@ export function Form({ sessionId }: FormProps) {
       <aside className="min-w-0 overflow-hidden lg:sticky lg:top-[84px] lg:max-h-[calc(100vh-104px)] lg:overflow-y-auto lg:pr-1">
         <ListingPreviewPanel
           session={session}
-          previewDraft={effectiveEditedDraft}
+          previewDraft={previewDraft}
           pendingImages={pendingPreviewImages}
           activeImageKey={activeImageKey}
           onActiveImageChange={setActiveImageKey}

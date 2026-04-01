@@ -1,17 +1,21 @@
+"use client";
+
+import { useParams } from "next/navigation";
 import { Form } from "@/components/listing-session/Form";
 import { ContentCard } from "@/components/dashboard/ContentCard";
-import styles from "@/components/dashboard/dashboard.module.css";
+import { useSettings } from "@/contexts/settings-context";
 
-type Props = {
-  params: Promise<{ id: string }>;
-};
+export default function ListingSessionPage() {
+  const params = useParams<{ id: string }>();
+  const { t } = useSettings();
+  const id = params.id;
 
-export default async function ListingSessionPage({ params }: Props) {
-  const { id } = await params;
   return (
-    <div className={styles.stack}>
-      <ContentCard title="Listing Session Editor" subtitle="Internal operator workspace for listing intake and publishing.">
-        <p className={styles.muted}>Session ID: {id}</p>
+    <div className="grid gap-4">
+      <ContentCard title={t.dashboard.listingEditorTitle} subtitle={t.dashboard.listingEditorSubtitle}>
+        <p className="text-sm text-[var(--muted-fg)]">
+          {t.dashboard.sessionId}: {id}
+        </p>
       </ContentCard>
       <Form sessionId={id} />
     </div>

@@ -105,7 +105,10 @@ export class SanityListingPublisher implements ListingPublisher {
     );
 
     const payloadWithRealAssets = await resolveGalleryAssetRefs(client, input);
-    const built = buildSanityPropertyMutation(payloadWithRealAssets);
+    const built = buildSanityPropertyMutation(payloadWithRealAssets, {
+      defaultAgentId: getServerEnv().SANITY_DEFAULT_AGENT_ID,
+      mode: input.mode,
+    });
     const existing = (await client.getDocument<{ createdAt?: string; _id: string }>(target.id).catch(() => null)) ?? null;
     const lifecycle = resolveLifecycleForMode(input.mode);
     const doc: SanityPropertyDocument & { _id: string } = {

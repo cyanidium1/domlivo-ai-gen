@@ -1,17 +1,22 @@
+"use client";
+
 import Link from "next/link";
 import { QuickLinksCard } from "@/components/dashboard/QuickLinksCard";
 import { ContentCard } from "@/components/dashboard/ContentCard";
-import styles from "@/components/dashboard/dashboard.module.css";
+import { useSettings } from "@/contexts/settings-context";
 
 export default function HomePage() {
+  const { t } = useSettings();
+
   return (
-    <div className={styles.stack}>
-      <ContentCard title="Welcome">
-        <p className={styles.muted}>
-          Use the sidebar to navigate project sections. Start with a new listing session.
-        </p>
-        <Link className={styles.utilityLink} href="/listing-sessions/new">
-          Open Listing Sessions
+    <div className="grid gap-4">
+      <ContentCard title={t.dashboard.welcomeTitle}>
+        <p className="text-sm text-[var(--muted-fg)]">{t.dashboard.welcomeBody}</p>
+        <Link
+          className="mt-3 inline-flex text-sm text-[var(--link-fg)] transition-colors hover:text-[var(--link-fg-hover)]"
+          href="/listing-sessions/new"
+        >
+          {t.dashboard.openListingSessions}
         </Link>
       </ContentCard>
       <QuickLinksCard />

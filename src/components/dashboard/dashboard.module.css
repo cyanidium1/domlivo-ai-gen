@@ -2,13 +2,13 @@
   display: grid;
   grid-template-columns: 260px minmax(0, 1fr);
   min-height: 100vh;
-  background: #0f1115;
-  color: #e8eaed;
+  background: var(--app-bg);
+  color: var(--app-fg);
 }
 
 .sidebar {
-  border-right: 1px solid #242832;
-  background: #12151b;
+  border-right: 1px solid var(--app-border);
+  background: var(--panel-bg);
   padding: 16px 12px;
   display: flex;
   flex-direction: column;
@@ -53,7 +53,7 @@
 .brandName {
   font-weight: 700;
   font-size: 15px;
-  color: #e8eaed;
+  color: var(--app-fg);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -100,7 +100,7 @@
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.08em;
-  color: #9aa3b2;
+  color: var(--muted-fg);
   margin: 0 10px 6px;
 }
 
@@ -115,37 +115,37 @@
 .navLink {
   display: block;
   text-decoration: none;
-  color: #c9d1dd;
+  color: var(--app-fg-soft);
   padding: 10px;
   border-radius: 10px;
   font-size: 14px;
 }
 
 .navLink:hover {
-  background: #1d232f;
+  background: var(--panel-hover);
 }
 
 .navLinkActive {
-  background: #253049;
-  color: #f3f6fc;
+  background: var(--panel-active);
+  color: var(--app-fg);
   font-weight: 600;
 }
 
 .utilityLink {
   display: block;
-  color: #9fc3ff;
+  color: var(--link-fg);
   text-decoration: none;
   font-size: 13px;
   padding: 6px 10px;
 }
 
 .utilityLink:hover {
-  color: #d5e5ff;
+  color: var(--link-fg-hover);
 }
 
 .accountBox {
   margin-top: auto;
-  border-top: 1px solid #242832;
+  border-top: 1px solid var(--app-border);
   padding-top: 12px;
   display: grid;
   gap: 8px;
@@ -153,14 +153,14 @@
 
 .accountName {
   font-size: 13px;
-  color: #d9dee8;
+  color: var(--app-fg);
   padding: 0 10px;
 }
 
 .accountAction {
-  border: 1px solid #2c3442;
+  border: 1px solid var(--app-border);
   background: transparent;
-  color: #c9d1dd;
+  color: var(--app-fg-soft);
   border-radius: 8px;
   padding: 8px 10px;
   text-align: left;
@@ -170,16 +170,16 @@
 
 .contentArea {
   min-width: 0;
-  background: #161a22;
+  background: var(--content-bg);
 }
 
 .header {
   position: sticky;
   top: 0;
   z-index: 20;
-  background: rgba(22, 26, 34, 0.9);
+  background: color-mix(in srgb, var(--content-bg) 90%, transparent);
   backdrop-filter: blur(8px);
-  border-bottom: 1px solid #252c3a;
+  border-bottom: 1px solid var(--app-border);
   padding: 14px 20px;
   display: flex;
   align-items: center;
@@ -194,9 +194,9 @@
 
 .menuButton {
   display: none;
-  border: 1px solid #2b3444;
-  background: #1c2230;
-  color: #e6ebf4;
+  border: 1px solid var(--app-border);
+  background: var(--panel-bg);
+  color: var(--app-fg);
   border-radius: 8px;
   padding: 8px 10px;
 }
@@ -206,9 +206,9 @@
 }
 
 .card {
-  border: 1px solid #2a3140;
+  border: 1px solid var(--app-border);
   border-radius: 12px;
-  background: #1c2230;
+  background: var(--panel-bg);
   padding: 16px;
 }
 
@@ -218,7 +218,7 @@
 }
 
 .muted {
-  color: #98a3b6;
+  color: var(--muted-fg);
   font-size: 13px;
 }
 
@@ -226,7 +226,7 @@
   display: inline-flex;
   align-items: center;
   border-radius: 999px;
-  border: 1px solid #38425a;
+  border: 1px solid var(--app-border);
   padding: 4px 10px;
   font-size: 12px;
   text-transform: uppercase;
@@ -250,9 +250,9 @@
 }
 
 .button {
-  border: 1px solid #34405a;
-  background: #232d44;
-  color: #f2f6fd;
+  border: 1px solid var(--app-border);
+  background: var(--panel-active);
+  color: var(--app-fg);
   border-radius: 9px;
   padding: 8px 12px;
   cursor: pointer;
@@ -271,10 +271,10 @@
 .textarea {
   width: 100%;
   box-sizing: border-box;
-  border: 1px solid #313b50;
+  border: 1px solid var(--app-border);
   border-radius: 9px;
-  background: #151a25;
-  color: #e8ecf6;
+  background: var(--input-bg);
+  color: var(--app-fg);
   padding: 10px 12px;
 }
 
@@ -531,8 +531,8 @@
 }
 
 .noticeBoxSecondary {
-  border: 1px solid #3a4a6a;
-  background: #182033;
+  border: 1px solid var(--app-border);
+  background: var(--panel-bg);
   border-radius: 10px;
   padding: 10px;
 }
@@ -545,7 +545,135 @@
 
 .noticeBody {
   font-size: 13px;
-  color: #d7dce6;
+  color: var(--app-fg-soft);
+}
+
+.mutedHeaderHint {
+  font-size: 12px;
+  color: var(--muted-fg);
+}
+
+.settingsPage {
+  display: grid;
+  gap: 12px;
+  max-width: 860px;
+}
+
+.settingsSectionCard {
+  border: 1px solid var(--app-border);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--panel-bg) 94%, transparent);
+  padding: 14px;
+}
+
+.settingsSectionHeader {
+  display: grid;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+
+.settingsRows {
+  display: grid;
+  gap: 8px;
+}
+
+.settingsRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  border: 1px solid color-mix(in srgb, var(--app-border) 85%, transparent);
+  border-radius: 12px;
+  padding: 10px 12px;
+  background: color-mix(in srgb, var(--panel-bg) 96%, transparent);
+}
+
+.settingsRowInfo {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.settingsRowLabel {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--app-fg);
+}
+
+.settingsRowHint {
+  font-size: 12px;
+  color: var(--muted-fg);
+}
+
+.settingsRowControl {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.settingsCompactSelect {
+  min-width: 180px;
+  max-width: 240px;
+  width: auto;
+  height: 36px;
+  border: 1px solid var(--app-border);
+  border-radius: 10px;
+  background: var(--input-bg);
+  color: var(--app-fg);
+  padding: 0 34px 0 10px;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  outline: none;
+}
+
+.settingsCompactSelect:hover {
+  border-color: color-mix(in srgb, var(--app-border) 70%, var(--app-fg-soft));
+}
+
+.settingsCompactSelect:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--link-fg) 65%, white);
+  outline-offset: 1px;
+}
+
+.settingsSegmented {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid var(--app-border);
+  border-radius: 999px;
+  padding: 3px;
+  background: color-mix(in srgb, var(--panel-bg) 92%, transparent);
+}
+
+.settingsSegmentedItem {
+  border: 0;
+  border-radius: 999px;
+  height: 30px;
+  padding: 0 12px;
+  min-width: 66px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted-fg);
+  background: transparent;
+  cursor: pointer;
+  transition: background-color 140ms ease, color 140ms ease;
+}
+
+.settingsSegmentedItem:hover {
+  color: var(--app-fg);
+}
+
+.settingsSegmentedItemActive {
+  background: var(--panel-active);
+  color: var(--app-fg);
+}
+
+.settingsFooterNote {
+  border: 1px solid var(--app-border);
+  background: color-mix(in srgb, var(--panel-bg) 96%, transparent);
+  border-radius: 12px;
+  padding: 12px;
 }
 
 .sectionAnchor {
@@ -665,6 +793,19 @@
 
   .desktopOnly {
     display: none;
+  }
+
+  .settingsRow {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+
+  .settingsRowControl {
+    justify-content: flex-start;
+  }
+
+  .settingsCompactSelect {
+    min-width: 170px;
   }
 }
 

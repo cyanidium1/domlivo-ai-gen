@@ -1,6 +1,7 @@
 import type { ListingDraft } from "@/lib/validation/listing-session";
 import type { ExtractedFacts } from "@/lib/validation/extracted-facts";
 import type { PublishGateErrors } from "@/lib/listing-session/publish-payload";
+import type { SupportedLanguage } from "@/lib/detection/language-detector";
 
 export type ListingSessionResponse = {
   id: string;
@@ -44,17 +45,24 @@ export type IntakeResultResponse = {
   intake: IntakeAnalysisResponse;
 };
 
+export type DraftPublishResponse = {
+  session: ListingSessionResponse;
+  persistedToSanity: boolean;
+  reason?: "publish_gate_not_satisfied";
+};
+
 type ApiErrorJson = {
   error?: { code?: string; message?: string; details?: PublishGateErrors | unknown | null };
 };
 
-export type ApiErrorWithDetails = Error & { details?: PublishGateErrors | unknown };
+export type ApiErrorWithDetails = Error & { details?: PublishGateErrors | unknown; code?: string };
 
-async function readApiError(response: Response): Promise<{ message: string; details?: unknown }> {
+async function readApiError(response: Response): Promise<{ message: string; details?: unknown; code?: string }> {
   const data = (await response.json().catch(() => ({}))) as ApiErrorJson;
   return {
     message: data?.error?.message || "Request failed",
     details: data?.error?.details ?? undefined,
+    code: data?.error?.code ?? undefined,
   };
 }
 
@@ -118,7 +126,7 @@ export async function publishSession(id: string) {
   return response.json();
 }
 
-export async function publishDraftSession(id: string) {
+export async function publishDraftSession(id: string): Promise<DraftPublishResponse> {
   const response = await fetch(`/api/listing-sessions/${id}/publish-draft`, { method: "POST" });
   if (!response.ok) {
     const { message, details } = await readApiError(response);
@@ -183,4 +191,29 @@ export async function removePhoto(id: string, assetId: string) {
     throw new Error(message);
   }
   return response.json();
+}
+
+export type ConversationalEditResponse = {
+  updatedDraft: ListingDraft;
+  changeSummary: string;
+};
+
+export async function conversationalEdit(
+  id: string,
+  instruction: string,
+  detectedInputLanguage?: SupportedLanguage,
+): Promise<ConversationalEditResponse> {
+  const response = await fetch(`/api/listing-sessions/${id}/conversational-edit`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ instruction, detectedInputLanguage }),
+  });
+  if (!response.ok) {
+    const { message, details, code } = await readApiError(response);
+    const err: ApiErrorWithDetails = new Error(message);
+    err.details = details;
+    err.code = code;
+    throw err;
+  }
+  return response.json() as Promise<ConversationalEditResponse>;
 }

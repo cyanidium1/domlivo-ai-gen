@@ -59,12 +59,15 @@ const intakeFactsJsonSchema = {
   },
 } as const;
 
+import type { SupportedLanguage } from "@/lib/detection/language-detector";
+
 type AnalyzeIntakeInput = {
   sourceText?: string | null;
   transcript?: string | null;
   existingFacts: ExtractedFacts;
   photoCount: number;
   referenceContext?: string;
+  detectedInputLanguage?: SupportedLanguage;
 };
 
 function summarizeFacts(facts: ExtractedFacts) {
@@ -108,6 +111,7 @@ export async function analyzeIntakeWithOpenAIDebug(input: AnalyzeIntakeInput): P
       transcript: input.transcript,
       existingFacts: input.existingFacts,
       referenceContext: input.referenceContext,
+      detectedInputLanguage: input.detectedInputLanguage,
     });
 
     console.info(

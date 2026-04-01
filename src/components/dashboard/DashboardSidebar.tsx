@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 import { NavSection } from "@/components/dashboard/NavSection";
+import { useSettings } from "@/contexts/settings-context";
 import styles from "@/components/dashboard/dashboard.module.css";
 
 type DashboardSidebarProps = {
@@ -11,15 +12,15 @@ type DashboardSidebarProps = {
   onNavigate: () => void;
 };
 
-const mainNav = [
-  { href: "/listing-sessions/new", label: "Listing Sessions / Real Estate" },
-  { href: "/blog-posts", label: "Blog Posts" },
-  { href: "/project-types", label: "Other Project Types" },
-  { href: "/settings", label: "Settings" },
-];
-
 export function DashboardSidebar({ open, onNavigate }: DashboardSidebarProps) {
   const pathname = usePathname();
+  const { t } = useSettings();
+  const mainNav = [
+    { href: "/listing-sessions/new", label: t.nav.listingSessions },
+    { href: "/blog-posts", label: t.nav.blogPosts },
+    { href: "/project-types", label: t.nav.projectTypes },
+    { href: "/settings", label: t.nav.settings },
+  ];
 
   return (
     <aside className={`${styles.sidebar} ${open ? styles.sidebarOpen : ""}`}>
@@ -32,7 +33,7 @@ export function DashboardSidebar({ open, onNavigate }: DashboardSidebarProps) {
         </span>
       </div>
 
-      <NavSection title="Workspace">
+      <NavSection title={t.nav.workspace}>
         <ul className={styles.navList}>
           {mainNav.map((item) => {
             const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
@@ -51,25 +52,25 @@ export function DashboardSidebar({ open, onNavigate }: DashboardSidebarProps) {
         </ul>
       </NavSection>
 
-      <NavSection title="Utilities">
+      <NavSection title={t.nav.utilities}>
         <a className={styles.utilityLink} href="http://localhost:3333" target="_blank" rel="noreferrer">
-          Open Sanity Studio
+          {t.nav.openStudio}
         </a>
         <a className={styles.utilityLink} href="http://localhost:3000" target="_blank" rel="noreferrer">
-          Open Domlivo Frontend
+          {t.nav.openFrontend}
         </a>
         <a className={styles.utilityLink} href="#" onClick={(e) => e.preventDefault()}>
-          Internal Preview (placeholder)
+          {t.nav.internalPreview}
         </a>
       </NavSection>
 
       <div className={styles.accountBox}>
-        <div className={styles.accountName}>Operator (placeholder)</div>
+        <div className={styles.accountName}>{t.nav.operator}</div>
         <button className={styles.accountAction} type="button">
-          Profile
+          {t.nav.profile}
         </button>
         <button className={styles.accountAction} type="button">
-          Login / Logout
+          {t.nav.loginLogout}
         </button>
       </div>
     </aside>

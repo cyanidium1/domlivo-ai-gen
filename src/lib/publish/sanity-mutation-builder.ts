@@ -225,26 +225,32 @@ function buildSeo(seo: PublishListingPayload["seo"]): SanityPropertySeo | undefi
  * This function is the single adapter between the ingestion domain model and
  * the Sanity schema. All field renames, type transforms, and drops are here.
  *
- * Throws `MutationBuilderError` if a Sanity-required ref is missing.
+ * Throws `MutationBuilderError` if a Sanity-required ref is missing (non-draft mode).
  *
  * Does NOT upload images. Gallery items must already have real Sanity asset
  * `_ref` values before calling this function.
  */
 export function buildSanityPropertyMutation(
   payload: PublishListingPayload,
+  options?: { defaultAgentId?: string; mode?: "draft" | "property" },
 ): SanityPropertyDocument {
+  const isDraft = options?.mode === "draft";
+  const agentRef = payload.sanityAgentRef ?? options?.defaultAgentId;
+
   // ------------------------------------------------------------------
   // Required Sanity refs — these must be present for a valid document.
   // Both are Sanity-required fields (agent, type) that are optional in
   // the ingestion draft but enforced here at the mutation boundary.
+  // In draft mode, missing refs are tolerated (Sanity draft can be
+  // saved without all refs and filled in by the editor).
   // ------------------------------------------------------------------
-  if (!payload.sanityAgentRef) {
+  if (!agentRef && !isDraft) {
     throw new MutationBuilderError(
       "agent",
       "sanityAgentRef is required to publish. Resolve an agent via intake or set a default agent.",
     );
   }
-  if (!payload.sanityPropertyTypeRef) {
+  if (!payload.sanityPropertyTypeRef && !isDraft) {
     throw new MutationBuilderError(
       "type",
       "sanityPropertyTypeRef is required to publish. Resolve propertyType during intake.",
@@ -260,11 +266,13 @@ export function buildSanityPropertyMutation(
     title: payload.title,
     slug: { _type: "slug", current: payload.slug.current },
 
-    // agent._ref ← sanityAgentRef
-    agent: sanityRef(payload.sanityAgentRef),
+    // agent._ref ← agentRef (from payload or default)
+    // In draft mode without an agent ref, fall back to a placeholder string
+    // that the editor can correct in Studio.
+    agent: sanityRef(agentRef ?? "unknown-agent"),
 
     // type._ref ← sanityPropertyTypeRef (Sanity field name: `type`)
-    type: sanityRef(payload.sanityPropertyTypeRef),
+    type: sanityRef(payload.sanityPropertyTypeRef ?? "unknown-type"),
 
     // status ← dealStatus (value enum is identical: sale|rent|short-term)
     status: payload.dealStatus,

@@ -1,6 +1,38 @@
 @import "tailwindcss";
 
 @layer base {
+  :root {
+    --app-bg: #0f1115;
+    --content-bg: #161a22;
+    --panel-bg: #1c2230;
+    --panel-hover: #1d232f;
+    --panel-active: #253049;
+    --input-bg: #151a25;
+    --app-fg: #e8eaed;
+    --app-fg-soft: #d7dce6;
+    --muted-fg: #98a3b6;
+    --app-border: #2a3140;
+    --link-fg: #9fc3ff;
+    --link-fg-hover: #d5e5ff;
+  }
+
+  html[data-theme="light"] {
+    --app-bg: #f6f8fb;
+    --content-bg: #eef2f7;
+    --panel-bg: #ffffff;
+    --panel-hover: #edf1f7;
+    --panel-active: #e6ecf7;
+    --input-bg: #ffffff;
+    --app-fg: #131722;
+    --app-fg-soft: #2b3242;
+    --muted-fg: #5d6780;
+    --app-border: #d5dbe8;
+    --link-fg: #2959c3;
+    --link-fg-hover: #1d47a6;
+  }
+}
+
+@layer base {
   *,
   *::before,
   *::after {
@@ -27,8 +59,8 @@
       Arial,
       "Apple Color Emoji",
       "Segoe UI Emoji";
-    background: #0f1115;
-    color: #e8eaed;
+    background: var(--app-bg);
+    color: var(--app-fg);
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
   }
@@ -50,12 +82,12 @@
   }
 
   ::-webkit-scrollbar-thumb {
-    background: #334155;
+    background: color-mix(in srgb, var(--muted-fg) 65%, transparent);
     border-radius: 9999px;
   }
 
   ::-webkit-scrollbar-thumb:hover {
-    background: #475569;
+    background: color-mix(in srgb, var(--muted-fg) 85%, transparent);
   }
 
   ::-webkit-scrollbar-corner {
@@ -65,7 +97,7 @@
   /* Firefox */
   * {
     scrollbar-width: thin;
-    scrollbar-color: #334155 transparent;
+    scrollbar-color: color-mix(in srgb, var(--muted-fg) 65%, transparent) transparent;
   }
 }
 

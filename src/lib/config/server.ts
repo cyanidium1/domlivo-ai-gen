@@ -31,6 +31,7 @@ const envSchema = z
     SANITY_READ_TOKEN: optionalNonEmpty,
     SANITY_WRITE_TOKEN: optionalNonEmpty,
     SANITY_API_TOKEN: optionalNonEmpty,
+    SANITY_DEFAULT_AGENT_ID: optionalNonEmpty,
   })
   .strict();
 
@@ -58,6 +59,7 @@ export function getServerEnv(): ServerEnv {
     SANITY_READ_TOKEN: process.env.SANITY_READ_TOKEN,
     SANITY_WRITE_TOKEN: process.env.SANITY_WRITE_TOKEN,
     SANITY_API_TOKEN: process.env.SANITY_API_TOKEN,
+    SANITY_DEFAULT_AGENT_ID: process.env.SANITY_DEFAULT_AGENT_ID,
   });
   if (!parsed.success) {
     throw new AppError("CONFIG_ERROR", "Invalid server environment configuration", 500, parsed.error.flatten());

@@ -8,8 +8,8 @@ type Params = {
 export async function POST(_: Request, { params }: Params) {
   try {
     const { id } = await params;
-    const updated = await publishListingSessionDraft(id);
-    return ok(updated);
+    const result = await publishListingSessionDraft(id);
+    return ok(result);
   } catch (error) {
     return fail(error);
   }

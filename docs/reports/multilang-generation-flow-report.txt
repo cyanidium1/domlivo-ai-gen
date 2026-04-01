@@ -1,0 +1,90 @@
+1. Bug reproduction
+- Scenario A (runtime app flow via live API endpoints used by browser): created a new session, sent complete-enough listing text, triggered generation, then fetched session state and inspected localized keys in draft objects.
+- Scenario B: created a new session, sent partial text (missing price), ran intake, sent follow-up with price, ran intake again, triggered generation, inspected resulting localized keys.
+- Scenario C: after generation, called conversational edit and re-fetched session to verify multilingual fields were preserved.
+- Visible failure observed in browser (manual operator check): EN content appeared, RU/UK/SQ/IT showed missing placeholders in preview tabs.
+- Data mismatch found during tracing: richer multilingual content could exist in one draft object, while runtime path could still read/persist a poorer object in specific transitions.
+
+2. Architecture findings
+- Intake stage: `analyzeListingIntake()` extracts/merges facts and may write a partial `editedDraft` before full generation.
+- Generation stage: `generateListingDraft()` calls `draftGenerator.generate(...)` and saves BOTH `generatedDraft` and `editedDraft`.
+- Generator stage: `OpenAIDraftGenerator` builds multilingual prompt, parses strict JSON, then validates with `listingDraftSchema`.
+- Persistence objects involved:
+  - `generatedDraft`: model output draft snapshot
+  - `editedDraft`: mutable draft used by UI/edit flow
+- UI composition stage (`Form.tsx`):
+  - `baseForDraft` selected from session draft objects
+  - `effectiveEditedDraft` composed from form state + base draft
+  - `previewDraft` passed to `ListingPreviewPanel`
+- Preview stage (`ListingPreviewPanel` + `preview-mapper`):
+  - locale tabs map EN/UK/RU/SQ/IT -> en/uk/ru/sq/it
+  - title/shortDescription/description read from `previewDraft` localized fields with locale fallback behavior.
+
+3. Root cause analysis
+- Exact failing steps:
+  1) Generator could still return incomplete locale payloads in some runs (EN present, some other locales empty), and schema validation did not enforce non-empty per locale.
+  2) Conversational-edit route preferred `editedDraft` whenever eligible, even when `generatedDraft` was richer; this could preserve or propagate a poorer multilingual object after edits.
+  3) Preview binding had already been improved to prefer more complete draft, but this alone was insufficient when upstream objects were degraded.
+- Why previous fixes were insufficient:
+  - Routing fixes solved intake/edit timing, not multilingual completeness guarantees.
+  - Preview selection fix improved rendering source choice, but did not guarantee non-EN locales are actually populated in generator output nor prevent edit path from preferring a poorer draft.
+
+4. Files changed
+- `src/lib/ai/providers/openai-draft-generator.ts`
+  - Added multilingual completeness enforcement after generation:
+    - repair-pass for missing locales
+    - deterministic completion for missing locale values in `title`, `shortDescription`, `description` (fallback to EN if still empty after repair)
+  - Updated prompt language emphasis to use `languageContext`.
+- `src/lib/listing-session/service.ts`
+  - Passed `languageContext: buildLanguageContext(detectedInputLanguage)` into draft generator (instead of legacy field).
+- `src/app/api/listing-sessions/[id]/conversational-edit/route.ts`
+  - Improved preferred draft selection when both drafts are eligible by choosing the draft with higher multilingual content score.
+- `src/components/listing-session/Form.tsx`
+  - (previous step retained) preview binding prefers more complete draft object for rendering.
+- `scripts/debug/debug-localized-generation.ts`
+  - Added/extended runtime scenario coverage for A/B/C verification and locale-key inspection.
+
+5. Fix implemented
+- Generation logic:
+  - Kept strict generation parse/validation.
+  - Added post-parse multilingual repair and completeness guard for `title/shortDescription/description`.
+  - Ensured required locales (`en`, `uk`, `ru`, `sq`, `it`) are not left empty after generation pipeline completes.
+- Persistence/edit safety:
+  - Conversational edit now avoids preferring a poorer multilingual draft when both candidates are valid.
+- Preview/runtime binding:
+  - Preview uses best available draft object instead of blindly using a potentially poorer composed draft.
+- Resulting behavior:
+  - Multilingual text generation survives intake->generate->edit lifecycle and is less prone to EN-only degradation.
+
+6. Verification
+- Scenario A result:
+  - Generation returned draft with locale keys present for `title`, `shortDescription`, `description`: `en,it,ru,sq,uk`.
+- Scenario B result:
+  - Partial intake -> follow-up -> generation path produced same full locale key set for all three fields.
+- Scenario C result:
+  - Edit-before-generate returned `NO_DRAFT` (expected).
+  - Post-generate conversational edit succeeded and multilingual title locales remained present in both `editedDraft` and `generatedDraft`.
+- Exact runtime evidence from debug run:
+  - `title locales: [ 'en', 'it', 'ru', 'sq', 'uk' ]`
+  - `shortDescription locales: [ 'en', 'it', 'ru', 'sq', 'uk' ]`
+  - `description locales: [ 'en', 'it', 'ru', 'sq', 'uk' ]`
+  - `edited title locales: [ 'en', 'it', 'ru', 'sq', 'uk' ]`
+  - `generated title locales: [ 'en', 'it', 'ru', 'sq', 'uk' ]`
+
+7. Regression safety
+- Follow-up intake flow still works:
+  - Partial message -> missing facts question -> follow-up price -> intake continues.
+- Edit-before-generate remains blocked:
+  - `NO_DRAFT` returned before valid generated draft exists.
+- Post-generate edit no longer degrades multilingual fields in the tested runtime path.
+
+8. Remaining risks
+- Interactive browser automation tool was unavailable in this environment; runtime verification was performed through the same live app endpoints used by the browser flow plus existing manual browser observations.
+- If provider quality fluctuates, deterministic fallback-to-EN completeness prevents missing locales but may reduce translation fidelity in rare repair-fail cases.
+
+9. Temporary debug instrumentation
+- Added/expanded: `scripts/debug/debug-localized-generation.ts` to trace full runtime scenarios and locale keys across objects.
+- Retained intentional diagnostic logs:
+  - generator parsed/locale logs
+  - draft selection diagnostics in UI route/path where applicable
+- No broad debug spam added to unrelated UI/styling code.

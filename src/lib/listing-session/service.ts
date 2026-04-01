@@ -1,7 +1,7 @@
 import type { Prisma } from "@prisma/client";
 
 import { getDraftGenerator } from "@/lib/ai";
-import { analyzePropertyImages, buildImageEnrichmentText } from "@/lib/ai/image-analyzer";
+import { analyzePropertyImages, buildVisualContextForPrompt } from "@/lib/ai/image-analyzer";
 import { prisma } from "@/lib/db/prisma";
 import { extractFacts, recoverFactsFromText } from "@/lib/extraction/extract-facts";
 import { AppError } from "@/lib/errors/app-error";
@@ -13,12 +13,15 @@ import { getTempStorage } from "@/lib/storage";
 import { getTranscriber } from "@/lib/transcription";
 import { uploadPhoto, uploadTempAsset } from "@/lib/storage/upload-photo";
 import { extractedFactsSchema, normalizeExtractedFacts } from "@/lib/validation/extracted-facts";
+import { getOperatorSettings } from "@/lib/operator-settings";
 import {
   createSessionSchema,
   listingDraftSchema,
   updateSessionSchema,
 } from "@/lib/validation/listing-session";
 import { createBaseDraftFromFacts } from "@/lib/listing-session/draft-mapper";
+import { detectInputLanguage } from "@/lib/detection/language-detector";
+import { buildLanguageContext } from "@/lib/ai/types";
 import {
   CRITICAL_CONFIRMATION_FIELDS,
   getConfirmation,
@@ -27,6 +30,7 @@ import {
   unsetConfirmed,
 } from "@/lib/listing-session/confirmation";
 import { buildPublishPayload } from "@/lib/listing-session/publish-payload";
+import { getServerEnv } from "@/lib/config/server";
 import {
   alignDraftAddressFromExtractedFacts,
   applyReferenceResolutionToFacts,
@@ -288,12 +292,16 @@ export async function analyzeListingIntake(id: string) {
     }),
   );
 
+  const combinedText = [session.sourceText, transcript].filter(Boolean).join(" ");
+  const detectedInputLanguage = detectInputLanguage(combinedText);
+
   const openAiFacts = await analyzeIntakeWithOpenAI({
     sourceText: session.sourceText,
     transcript,
     existingFacts: normalizedRuleFacts,
     photoCount: session.assets.filter((a) => a.kind === "photo" && a.status !== "deleted").length,
     referenceContext: formatReferenceContextForPrompt(sanityRef),
+    detectedInputLanguage,
   });
 
   const normalizedFacts = normalizeExtractedFacts(
@@ -402,30 +410,22 @@ export async function generateListingDraft(id: string) {
     const extractedFacts = stageA.intake.knownFacts;
     const sanityRef = await fetchSanityReferenceData();
 
-    const draftGenerator = getDraftGenerator();
-    const baseDraft = createBaseDraftFromFacts(id, extractedFacts);
-    const generated = await draftGenerator.generate({
-      sourceText: session.sourceText ?? "",
-      transcript,
-      extractedFacts,
-      referenceContextText: formatReferenceContextForPrompt(sanityRef),
-    });
-    let draft = listingDraftSchema.parse({
-      ...baseDraft,
-      ...generated,
-      ai: {
-        ...(generated.ai ?? baseDraft.ai),
-        sourcePrompt: session.sourceText ?? undefined,
-        transcript: transcript ?? undefined,
-        rawExtractedFacts: extractedFacts,
-        generatedAt: new Date().toISOString(),
-      },
-    });
-    draft = sanitizeEmbeddedPropertyOffers(draft);
-    draft = alignDraftAddressFromExtractedFacts(draft, extractedFacts);
+    // Detect input language from combined source text and transcript
+    const combinedText = [session.sourceText, transcript].filter(Boolean).join(" ");
+    const detectedInputLanguage = detectInputLanguage(combinedText);
 
-    // Enrich description with image analysis (best-effort, non-blocking).
+    // Extract contentBrief from intakeHints if present
+    const intakeHints = extractedFacts.intakeHints as Record<string, unknown> | undefined;
+    const contentBrief = typeof intakeHints?.contentBrief === "string" ? intakeHints.contentBrief : null;
+
+    // Load operator-configured description style example (best-effort, non-blocking)
+    const operatorSettings = await getOperatorSettings().catch(() => ({ descriptionExample: null }));
+
+    // Run vision analysis on uploaded photos BEFORE generation so the model can
+    // incorporate visual signals (sea view, finishes, layout, condition, etc.)
+    // natively into every locale's description — not appended as raw English text.
     const photoAssets = session.assets.filter((a) => a.kind === "photo" && a.status !== "deleted");
+    let visualContext: string | null = null;
     if (photoAssets.length > 0) {
       try {
         const storage = getTempStorage();
@@ -440,27 +440,41 @@ export async function generateListingDraft(id: string) {
 
         if (imageInputs.length > 0) {
           const imageAnalysis = await analyzePropertyImages(imageInputs);
-          const enrichment = buildImageEnrichmentText(imageAnalysis);
-          if (enrichment) {
-            // Append image-derived context to each locale's description.
-            const locales = ["en", "uk", "ru", "sq", "it"] as const;
-            const description = { ...(draft.description ?? {}) };
-            for (const locale of locales) {
-              const existing = (description as Record<string, string | undefined>)[locale] ?? "";
-              if (existing) {
-                (description as Record<string, string>)[locale] = `${existing}\n\n${enrichment}`;
-              } else {
-                (description as Record<string, string>)[locale] = enrichment;
-              }
-            }
-            draft = { ...draft, description };
-            console.info("[ai][draft] enriched description with", imageInputs.length, "image(s)");
+          visualContext = buildVisualContextForPrompt(imageAnalysis);
+          if (visualContext) {
+            console.info("[ai][draft] vision analysis complete —", imageInputs.length, "image(s) → visual context ready for generator");
           }
         }
       } catch (imgErr) {
-        console.warn("[ai][draft] image analysis failed, continuing:", imgErr instanceof Error ? imgErr.message : String(imgErr));
+        console.warn("[ai][draft] vision analysis failed, continuing without visual context:", imgErr instanceof Error ? imgErr.message : String(imgErr));
       }
     }
+
+    const draftGenerator = getDraftGenerator();
+    const baseDraft = createBaseDraftFromFacts(id, extractedFacts);
+    const generated = await draftGenerator.generate({
+      sourceText: session.sourceText ?? "",
+      transcript,
+      extractedFacts,
+      referenceContextText: formatReferenceContextForPrompt(sanityRef),
+      languageContext: buildLanguageContext(detectedInputLanguage),
+      contentBrief,
+      descriptionStyleExample: operatorSettings.descriptionExample,
+      visualContext,
+    });
+    let draft = listingDraftSchema.parse({
+      ...baseDraft,
+      ...generated,
+      ai: {
+        ...(generated.ai ?? baseDraft.ai),
+        sourcePrompt: session.sourceText ?? undefined,
+        transcript: transcript ?? undefined,
+        rawExtractedFacts: extractedFacts,
+        generatedAt: new Date().toISOString(),
+      },
+    });
+    draft = sanitizeEmbeddedPropertyOffers(draft);
+    draft = alignDraftAddressFromExtractedFacts(draft, extractedFacts);
 
     return prisma.listingSession.update({
       where: { id },
@@ -536,11 +550,21 @@ async function publishListingSessionInternal(id: string, mode: "draft" | "proper
       },
     });
   } catch (error) {
+    console.error(
+      "[publish][service] failure",
+      JSON.stringify({
+        sessionId: id,
+        mode,
+        message: error instanceof Error ? error.message : String(error),
+      }),
+    );
     await prisma.listingSession.update({ where: { id }, data: { status: "failed" } });
     if (error instanceof AppError) {
       throw error;
     }
-    throw new AppError("PUBLISH_FAILED", "Failed to publish listing", 500);
+    throw new AppError("PUBLISH_FAILED", "Failed to publish listing", 500, {
+      cause: error instanceof Error ? error.message : String(error),
+    });
   }
 }
 
@@ -548,6 +572,114 @@ export async function publishListingSession(id: string) {
   return publishListingSessionInternal(id, "property");
 }
 
+export type DraftPublishResult = {
+  session: Awaited<ReturnType<typeof prisma.listingSession.update>>;
+  persistedToSanity: boolean;
+  reason?: "publish_gate_not_satisfied";
+};
+
 export async function publishListingSessionDraft(id: string) {
-  return publishListingSessionInternal(id, "draft");
+  const session = await prisma.listingSession.findUnique({ where: { id }, include: sessionWithAssetsInclude });
+  if (!session) {
+    throw new AppError("NOT_FOUND", "Session not found", 404);
+  }
+
+  // Draft publish is intentionally permissive: save/keep editable draft even when
+  // full property publish gate is not yet satisfied.
+  const draftParsed = listingDraftSchema.safeParse(session.editedDraft);
+  if (!draftParsed.success) {
+    throw new AppError("VALIDATION_ERROR", "Cannot publish draft: edited draft is invalid", 400, draftParsed.error.flatten());
+  }
+
+  const gate = buildPublishPayload({
+    id: session.id,
+    editedDraft: session.editedDraft,
+    confirmation: (session as { confirmation?: unknown }).confirmation,
+  });
+
+  if (!gate.ok) {
+    // Permissive draft save: attempt Sanity write even without gallery/agent/confirmation,
+    // as long as the draft has the minimum fields needed to identify the listing.
+    const draft = draftParsed.data;
+    const hasTitleEn = Boolean(draft.title?.en?.trim());
+    const hasPrice = typeof draft.price === "number" && draft.price > 0;
+    const hasDealStatus = Boolean(draft.dealStatus);
+    const env = getServerEnv();
+
+    if (hasTitleEn && hasPrice && hasDealStatus && env.PUBLISH_PROVIDER === "sanity") {
+      // Build a minimal permissive payload: fill in required schema fields with safe defaults.
+      // Gallery is set to empty, agent and type refs use env defaults or placeholders.
+      // We cast to PublishListingPayload because the schema requires gallery min(1),
+      // but the mutation builder handles empty gallery gracefully in draft mode.
+      type PermissivePayload = import("@/lib/validation/listing-session").PublishListingPayload;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const permissivePayload: PermissivePayload = {
+        ...draft,
+        internalRef: draft.internalRef ?? `session-${id}`,
+        status: draft.status ?? "draft",
+        title: draft.title ?? { en: "" },
+        slug: draft.slug ?? { current: `listing-${id}` },
+        price: draft.price!,
+        dealStatus: draft.dealStatus!,
+        facts: {
+          propertyType: draft.facts?.propertyType ?? "property",
+          area: draft.facts?.area ?? 0,
+          bedrooms: draft.facts?.bedrooms,
+          bathrooms: draft.facts?.bathrooms,
+          yearBuilt: draft.facts?.yearBuilt,
+        },
+        description: draft.description ?? { en: "" },
+        gallery: [] as PermissivePayload["gallery"],
+        coverImage: undefined as unknown as PermissivePayload["coverImage"],
+        sanityAgentRef: draft.sanityAgentRef ?? env.SANITY_DEFAULT_AGENT_ID ?? "unknown-agent",
+        sanityPropertyTypeRef: draft.sanityPropertyTypeRef ?? "unknown-type",
+        sourceSessionId: id,
+      };
+
+      try {
+        const publisher = getListingPublisher();
+        const published = await publisher.publish({
+          sessionId: id,
+          payload: permissivePayload,
+          mode: "draft",
+          existingSanityDocumentId: session.sanityDocumentId,
+        });
+        const updated = await prisma.listingSession.update({
+          where: { id },
+          data: {
+            sanityDocumentId: published.sanityDocumentId,
+            status: "editing",
+          },
+          include: sessionWithAssetsInclude,
+        });
+        return {
+          session: updated,
+          persistedToSanity: true,
+        } satisfies DraftPublishResult;
+      } catch (err) {
+        // Permissive save failed — fall back to local-only
+        console.warn(
+          "[publish][draft] permissive Sanity save failed, falling back to local",
+          err instanceof Error ? err.message : String(err),
+        );
+      }
+    }
+
+    const updated = await prisma.listingSession.update({
+      where: { id },
+      data: { status: "editing" },
+      include: sessionWithAssetsInclude,
+    });
+    return {
+      session: updated,
+      persistedToSanity: false,
+      reason: "publish_gate_not_satisfied",
+    } satisfies DraftPublishResult;
+  }
+
+  const updated = await publishListingSessionInternal(id, "draft");
+  return {
+    session: updated,
+    persistedToSanity: true,
+  } satisfies DraftPublishResult;
 }

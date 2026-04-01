@@ -6,6 +6,7 @@ import { AppError } from "@/lib/errors/app-error";
 import { getOpenAIClient } from "@/lib/openai/client";
 import { mapOpenAIError } from "@/lib/openai/error";
 import { listingDraftSchema, type ListingDraft } from "@/lib/validation/listing-session";
+import { SANITY_LOCALES, type SanityLocale } from "@/lib/validation/property-i18n";
 
 // OpenAI strict mode requires ALL properties to be listed in `required`.
 // Locale fields are always expected — the model must fill all 5 or copy EN.
@@ -151,6 +152,37 @@ const listingDraftJsonSchema = {
 } as const;
 
 function buildPrompt(input: DraftGeneratorInput) {
+  const emphasizedLocale = input.languageContext?.emphasizedLocale;
+  const langNote = emphasizedLocale && emphasizedLocale !== "en"
+    ? `The realtor wrote primarily in ${emphasizedLocale === "ru" ? "Russian" : emphasizedLocale === "uk" ? "Ukrainian" : emphasizedLocale === "sq" ? "Albanian" : "Italian"}. The ${emphasizedLocale} locale should feel especially natural and idiomatic.`
+    : "";
+
+  const briefNote = input.contentBrief?.trim()
+    ? `\nCONTENT BRIEF (apply to description tone/audience):\n${input.contentBrief.trim()}`
+    : "";
+
+  const visualContextNote = input.visualContext?.trim()
+    ? `\n${input.visualContext.trim()}`
+    : "";
+
+  const styleExampleNote = input.descriptionStyleExample?.trim()
+    ? [
+        "",
+        "STYLE TEMPLATE — MANDATORY:",
+        "An operator has provided the following example description as a STYLE REFERENCE.",
+        "You MUST:",
+        "  • Mimic the example's tone, paragraph structure, formatting, spacing, emoji usage, and sales style.",
+        "  • Apply this style to ALL generated locales (en, uk, ru, sq, it) adapted naturally to each language.",
+        "You MUST NOT:",
+        "  • Copy any factual content from the example (price, city, size, address, property type, etc.).",
+        "  • Invent facts to match the example — all facts come from extractedFacts below.",
+        "  • Use the example as a content source — it is a STYLE SOURCE ONLY.",
+        "---STYLE EXAMPLE BEGIN---",
+        input.descriptionStyleExample.trim(),
+        "---STYLE EXAMPLE END---",
+      ].join("\n")
+    : "";
+
   return [
     "You are a senior real-estate editorial assistant producing professional listing content.",
     "Generate a single JSON object ONLY; no markdown, no prose, no code fences.",
@@ -158,19 +190,33 @@ function buildPrompt(input: DraftGeneratorInput) {
     "Trust hierarchy:",
     "1) extractedFacts — canonical source for all hard facts (price, area, city, propertyType, dealStatus, bedrooms, bathrooms).",
     "2) sourceText and transcript — narrative context, tone, selling points.",
-    "3) Do not invent hard facts. Omit if genuinely unknown.",
+    "3) STYLE TEMPLATE (if present) — style/format/emoji reference ONLY; never a fact source.",
+    "4) Do not invent hard facts. Omit if genuinely unknown.",
+    langNote,
+    briefNote,
+    visualContextNote,
+    styleExampleNote,
     "",
     "LOCALIZATION — MANDATORY:",
     "ALL localized string fields (title, shortDescription, description, address.displayAddress,",
     "seo.metaTitle, seo.metaDescription, every propertyOffers[].title) MUST be populated in ALL 5 locales: en, uk, ru, sq, it.",
-    "Translate meaningfully — do not just repeat the EN string. Use natural phrasing for each language.",
-    "For Albanian (sq) and Italian (it), use proper real-estate terminology for that market.",
+    "CRITICAL: Generate each locale DIRECTLY in its target language. Do NOT write EN first and translate.",
+    "  • en  — write the full description naturally in English.",
+    "  • ru  — write DIRECTLY in Russian as a native Russian-speaking realtor would. Do NOT translate from EN.",
+    "  • uk  — write DIRECTLY in Ukrainian. Do NOT translate from EN or RU.",
+    "  • sq  — write DIRECTLY in Albanian using local real-estate phrasing.",
+    "  • it  — write DIRECTLY in Italian using Italian property market conventions.",
+    "If a STYLE TEMPLATE is provided, apply its emoji usage, paragraph rhythm and sales energy independently",
+    "to each locale — adapt phrasing to each language's natural style, never copy the EN wording.",
     "",
     "CONTENT QUALITY:",
     "- title: concise, appealing (max ~60 chars per locale). Include property type, city, key feature.",
     "- shortDescription: 1-2 sentences, highlights the most compelling selling points.",
     "- description: 2-4 paragraphs. Start with a strong hook. Cover: location & neighbourhood, property",
     "  features, lifestyle benefits. Write in present tense, active voice. Be specific, not generic.",
+    "  If contentBrief specifies an audience (investor, family, etc.), tailor description accordingly.",
+    "  Each locale MUST be written directly in its target language, not translated from EN.",
+    "  Incorporate any VISUAL SIGNALS (if present) naturally into every locale.",
     "- propertyOffers: 3-6 items, each highlighting a distinct selling point with a localized title.",
     "- seo: metaTitle concise (≤60 chars), metaDescription compelling summary (≤155 chars).",
     "",
@@ -213,9 +259,150 @@ function stripNullsDeep(value: unknown): unknown {
   return value;
 }
 
+/**
+ * Sanitize a locale object by converting empty or whitespace-only strings to absent keys.
+ *
+ * WHY THIS EXISTS:
+ * OpenAI strict mode requires all 5 locale keys to be `type: "string"`. The model
+ * satisfies this by returning `""` for locales it cannot fill rather than null.
+ * Our Zod `localizedStringSchema` uses `z.string().min(1).optional()` — a present
+ * empty string `""` passes the type check but fails `min(1)`, throwing a ZodError.
+ * By dropping empty strings here (before Zod), `.optional()` then applies correctly
+ * and `ensureLocaleCompleteness` fills the gaps with EN content downstream.
+ */
+function sanitizeLocaleObject(obj: unknown): Record<string, string> | undefined {
+  if (!obj || typeof obj !== "object" || Array.isArray(obj)) return undefined;
+  const result: Record<string, string> = {};
+  for (const [k, v] of Object.entries(obj as Record<string, unknown>)) {
+    if (typeof v === "string" && v.trim()) {
+      result[k] = v.trim();
+    }
+  }
+  return Object.keys(result).length > 0 ? result : undefined;
+}
+
+function missingLocalesFor(value: Partial<Record<SanityLocale, string | undefined>> | undefined): SanityLocale[] {
+  return SANITY_LOCALES.filter((locale) => !(value?.[locale] ?? "").trim());
+}
+
+function ensureLocaleCompleteness(
+  field: Partial<Record<SanityLocale, string | undefined>> | undefined,
+  fieldName: "title" | "shortDescription" | "description",
+): Record<SanityLocale, string> {
+  const en = (field?.en ?? "").trim();
+  const next: Record<SanityLocale, string> = {
+    en,
+    uk: (field?.uk ?? "").trim(),
+    ru: (field?.ru ?? "").trim(),
+    sq: (field?.sq ?? "").trim(),
+    it: (field?.it ?? "").trim(),
+  };
+  for (const locale of SANITY_LOCALES) {
+    if (!next[locale] && en) {
+      next[locale] = en;
+    }
+  }
+  const stillMissing = SANITY_LOCALES.filter((locale) => !next[locale]);
+  if (stillMissing.length > 0) {
+    console.warn(`[ai][draft] ${fieldName} has empty locales after repair`, stillMissing);
+  }
+  return next;
+}
+
+const localizedContentRepairSchema = {
+  name: "localized_content_repair",
+  strict: true,
+  schema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["title", "shortDescription", "description"],
+    properties: {
+      title: { ...localeShape },
+      shortDescription: { ...localeShape },
+      description: { ...localeShape },
+    },
+  },
+} as const;
+
+async function repairMissingLocalizedContent(params: {
+  client: ReturnType<typeof getOpenAIClient>;
+  model: string;
+  input: DraftGeneratorInput;
+  draft: ListingDraft;
+}): Promise<ListingDraft> {
+  const { client, model, input, draft } = params;
+  const missing = {
+    title: missingLocalesFor(draft.title),
+    shortDescription: missingLocalesFor(draft.shortDescription),
+    description: missingLocalesFor(draft.description),
+  };
+  const hasMissing = Object.values(missing).some((arr) => arr.length > 0);
+  if (!hasMissing) return draft;
+
+  console.info("[ai][draft] repairing missing locales", JSON.stringify(missing));
+
+  const response = await client.responses.create({
+    model,
+    input: [
+      {
+        role: "user",
+        content: [
+          {
+            type: "input_text",
+            text: [
+              "Fill missing locales for listing content.",
+              "Return JSON only with full locale objects for title, shortDescription, description.",
+              "Locales are mandatory: en, uk, ru, sq, it.",
+              "Keep existing non-empty values semantically aligned. Fill only missing locales with natural translations.",
+              "",
+              `MISSING_LOCALES: ${JSON.stringify(missing)}`,
+              `CURRENT_VALUES: ${JSON.stringify({
+                title: draft.title,
+                shortDescription: draft.shortDescription,
+                description: draft.description,
+              })}`,
+              `FACTS_CONTEXT: ${JSON.stringify(input.extractedFacts)}`,
+              `SOURCE_CONTEXT: ${input.sourceText || ""}\n${input.transcript || ""}`,
+            ].join("\n"),
+          },
+        ],
+      },
+    ],
+    text: {
+      format: {
+        type: "json_schema",
+        ...localizedContentRepairSchema,
+      },
+    },
+  });
+
+  const outputText = response.output_text?.trim();
+  if (!outputText) return draft;
+  const rawRepaired = JSON.parse(outputText) as Record<string, unknown>;
+  // Sanitize locale fields from repair model for the same reason as the main pass:
+  // empty strings satisfy type:"string" in OpenAI strict schema but fail z.string().min(1).
+  const repaired = stripNullsDeep({
+    title: sanitizeLocaleObject(rawRepaired.title) ?? rawRepaired.title,
+    shortDescription: sanitizeLocaleObject(rawRepaired.shortDescription) ?? rawRepaired.shortDescription,
+    description: sanitizeLocaleObject(rawRepaired.description) ?? rawRepaired.description,
+  }) as {
+    title?: Partial<Record<SanityLocale, string>>;
+    shortDescription?: Partial<Record<SanityLocale, string>>;
+    description?: Partial<Record<SanityLocale, string>>;
+  };
+
+  return listingDraftSchema.parse({
+    ...draft,
+    title: { ...draft.title, ...(repaired.title ?? {}) },
+    shortDescription: { ...draft.shortDescription, ...(repaired.shortDescription ?? {}) },
+    description: { ...draft.description, ...(repaired.description ?? {}) },
+  });
+}
+
 export class OpenAIDraftGenerator implements DraftGenerator {
   async generate(input: DraftGeneratorInput): Promise<ListingDraft> {
     try {
+      console.log('STYLE EXAMPLE USED:', input.descriptionStyleExample ?? null);
       const env = getServerEnv();
       const client = getOpenAIClient();
 
@@ -250,22 +437,70 @@ export class OpenAIDraftGenerator implements DraftGenerator {
         }),
       );
 
-      const parsed = stripNullsDeep(JSON.parse(outputText));
+      const rawParsed = JSON.parse(outputText) as Record<string, unknown>;
+      // Sanitize locale objects before stripNullsDeep: the model satisfies
+      // `type: "string"` with "" for unknown locales, but localizedStringSchema
+      // uses z.string().min(1).optional() — an empty string present in the object
+      // is NOT treated as optional and throws ZodError. Removing empty strings
+      // here lets .optional() apply and allows ensureLocaleCompleteness to fill gaps.
+      const sanitizedTitle = sanitizeLocaleObject(rawParsed.title);
+      const sanitizedShort = sanitizeLocaleObject(rawParsed.shortDescription);
+      const sanitizedDesc = sanitizeLocaleObject(rawParsed.description);
+      const localeEmptiesFound =
+        (sanitizedTitle ? Object.keys(sanitizedTitle).length : 0) <
+          (rawParsed.title && typeof rawParsed.title === "object" ? Object.keys(rawParsed.title).length : 0) ||
+        (sanitizedShort ? Object.keys(sanitizedShort).length : 0) <
+          (rawParsed.shortDescription && typeof rawParsed.shortDescription === "object"
+            ? Object.keys(rawParsed.shortDescription).length
+            : 0) ||
+        (sanitizedDesc ? Object.keys(sanitizedDesc).length : 0) <
+          (rawParsed.description && typeof rawParsed.description === "object"
+            ? Object.keys(rawParsed.description).length
+            : 0);
+      if (localeEmptiesFound) {
+        console.warn(
+          "[ai][draft] sanitizeLocaleObject removed empty locale strings from model output",
+          JSON.stringify({
+            titleLocalesKept: Object.keys(sanitizedTitle ?? {}),
+            shortDescLocalesKept: Object.keys(sanitizedShort ?? {}),
+            descLocalesKept: Object.keys(sanitizedDesc ?? {}),
+          }),
+        );
+      }
+      const sanitized: Record<string, unknown> = {
+        ...rawParsed,
+        title: sanitizedTitle ?? rawParsed.title,
+        shortDescription: sanitizedShort ?? rawParsed.shortDescription,
+        description: sanitizedDesc ?? rawParsed.description,
+      };
+      const parsed = stripNullsDeep(sanitized);
       const validated = listingDraftSchema.parse(parsed);
+      const repaired = await repairMissingLocalizedContent({
+        client,
+        model: env.OPENAI_DRAFT_MODEL,
+        input,
+        draft: validated,
+      });
+      const completed = listingDraftSchema.parse({
+        ...repaired,
+        title: ensureLocaleCompleteness(repaired.title, "title"),
+        shortDescription: ensureLocaleCompleteness(repaired.shortDescription, "shortDescription"),
+        description: ensureLocaleCompleteness(repaired.description, "description"),
+      });
       console.info(
         "[ai][draft] parsed",
         JSON.stringify({
           stage: "draft",
-          titlePresent: Boolean(validated.title?.en),
-          shortDescriptionPresent: Boolean(validated.shortDescription?.en),
-          cityPresent: Boolean(validated.address?.city),
-          factsKeys: Object.keys(validated.facts ?? {}),
-          localesWithTitle: Object.entries(validated.title ?? {})
+          titlePresent: Boolean(completed.title?.en),
+          shortDescriptionPresent: Boolean(completed.shortDescription?.en),
+          cityPresent: Boolean(completed.address?.city),
+          factsKeys: Object.keys(completed.facts ?? {}),
+          localesWithTitle: Object.entries(completed.title ?? {})
             .filter(([, v]) => Boolean(v))
             .map(([k]) => k),
         }),
       );
-      return validated;
+      return completed;
     } catch (error) {
       console.error("[openai-draft-generator] generation failed");
       throw mapOpenAIError(error, "openai draft generation");

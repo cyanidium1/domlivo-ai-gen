@@ -71,8 +71,29 @@ export async function analyzePropertyImages(
 /**
  * Builds an enrichment paragraph from image analysis results to append to the
  * property description. Returns null if there's nothing to add.
+ * @deprecated Prefer buildVisualContextForPrompt — inject before generation instead of appending after.
  */
 export function buildImageEnrichmentText(result: ImageFeatureResult): string | null {
   if (!result.descriptions.length) return null;
   return result.descriptions.join(" ");
+}
+
+/**
+ * Formats image analysis results as a prompt section to be injected into the
+ * generator before generation runs. This lets the model incorporate visual
+ * observations naturally into every locale's description rather than appending
+ * raw English text afterwards.
+ *
+ * Returns null when there are no descriptions to include.
+ */
+export function buildVisualContextForPrompt(result: ImageFeatureResult): string | null {
+  if (!result.descriptions.length) return null;
+  const bullets = result.descriptions.map((d, i) => `  • Photo ${i + 1}: ${d}`).join("\n");
+  return [
+    "VISUAL SIGNALS (extracted from uploaded photos via vision analysis):",
+    bullets,
+    "Use these observations as factual inputs when writing descriptions in ALL locales.",
+    "Mention relevant visual features (views, finishes, layout, condition) naturally in each language.",
+    "Do NOT translate the signal text — write about these features directly in each target language.",
+  ].join("\n");
 }

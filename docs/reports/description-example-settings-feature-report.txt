@@ -1,0 +1,197 @@
+FEATURE REPORT: Description Style Example in Operator Settings
+==============================================================
+Date: 2026-04-01
+Status: Complete
+
+---
+
+## OVERVIEW
+
+This report documents the end-to-end implementation of the "description style example" feature.
+The feature allows an operator to paste an example listing description in Settings. The AI then
+mimics the tone, formatting, paragraph structure, emoji usage, and sales style of that example
+when generating listing descriptions — without copying its factual content.
+
+---
+
+## WHAT WAS IMPLEMENTED
+
+### Persistent settings storage
+- A new Prisma model `OperatorSettings` (singleton, id = "singleton") stores the description
+  example as a nullable string in the database.
+- The row is upserted on every write; only one row ever exists.
+
+### Server-side settings module
+- `src/lib/operator-settings/index.ts` — server-only module providing `getOperatorSettings()`
+  and `updateOperatorSettings()`. Both are async and interact with Prisma.
+
+### REST API
+- `GET /api/operator-settings` — returns `{ descriptionExample: string | null }`.
+- `PATCH /api/operator-settings` — accepts `{ descriptionExample: string | null }`.
+  Empty strings are coerced to null (no empty-string drift in the DB).
+
+### AI prompt integration
+- `src/lib/ai/types.ts` — `DraftGeneratorInput` type extended with `descriptionStyleExample?: string | null`.
+- `src/lib/ai/providers/openai-draft-generator.ts` — `buildPrompt()` injects the style example
+  under a `STYLE TEMPLATE — MANDATORY:` section when the field is non-empty. The section
+  instructs the model to mimic style only and explicitly forbids copying factual content.
+  The trust hierarchy line was updated to reference the style template at priority 3.
+
+### Initial generation flow
+- `src/lib/listing-session/service.ts` — `generateListingDraft()` calls `getOperatorSettings()`
+  (best-effort, non-blocking via `.catch()`) before `draftGenerator.generate()` and passes
+  `descriptionStyleExample` in the generator input. Failure to load settings is non-fatal and
+  falls back to `null` (default AI style).
+
+### Conversational edit / regeneration flow
+- `src/app/api/listing-sessions/[id]/conversational-edit/route.ts` — when the conversational
+  editor interprets the user message as requiring a full content rewrite (`needsContentRewrite`
+  flag), the route now loads operator settings, calls `draftGenerator.generate()` with both
+  `contentBrief` (audience/tone instruction from the user) and `descriptionStyleExample` (from
+  operator settings). Non-fatal fallback to fact-patched draft if the rewrite fails.
+
+### Settings UI
+- `src/app/(dashboard)/settings/page.tsx` — new "AI Generation" settings section with:
+  - A controlled `<textarea>` (6 rows, resizable) pre-populated on mount via `GET /api/operator-settings`.
+  - A Save button calling `PATCH /api/operator-settings`.
+  - Three UI states: idle, saving (button disabled + "Saving…" label), saved (resets after 2.5 s).
+  - Error state displayed inline if the save fails (resets after 3 s).
+  - Editing text after saving resets the "Saved" state back to "idle".
+
+### Internationalisation
+- `src/lib/i18n/messages.ts` — six new keys added to the `settings` section across all five
+  locales (en, ru, uk, sq, it):
+    - `aiGeneration` — section heading
+    - `descriptionExample` — textarea label
+    - `descriptionExampleHelp` — hint text under the label
+    - `descriptionExampleSave` — save button default label
+    - `descriptionExampleSaved` — save button success label
+    - `descriptionExampleSaving` — save button loading label
+
+---
+
+## FILES CHANGED
+
+| File | Change |
+|------|--------|
+| prisma/schema.prisma | Added OperatorSettings model |
+| src/lib/operator-settings/index.ts | NEW — server-only settings module |
+| src/app/api/operator-settings/route.ts | NEW — GET / PATCH REST endpoint |
+| src/lib/ai/types.ts | Added descriptionStyleExample field to DraftGeneratorInput |
+| src/lib/ai/providers/openai-draft-generator.ts | Style template injection in buildPrompt(); also includes the locale bug fix (sanitizeLocaleObject) |
+| src/lib/listing-session/service.ts | Load operator settings, pass to generator |
+| src/app/api/listing-sessions/[id]/conversational-edit/route.ts | Load operator settings for needsContentRewrite path |
+| src/lib/i18n/messages.ts | 6 new keys × 5 locales in settings section |
+| src/app/(dashboard)/settings/page.tsx | DescriptionExampleEditor component + AI Generation section |
+
+---
+
+## SETTINGS PERSISTENCE MECHANISM
+
+Storage: PostgreSQL via Prisma, table `operator_settings`, single row (`id = "singleton"`).
+Write: upsert on every PATCH — safe for concurrent requests, idempotent.
+Read: `findUnique` — returns null row as `{ descriptionExample: null }` so callers always
+      receive a consistent shape.
+Server-only: the `operator-settings` module has `import "server-only"` which prevents accidental
+             import in client components and surfaces a build error if attempted.
+
+---
+
+## HOW THE GENERATOR USES THE EXAMPLE
+
+When `descriptionStyleExample` is a non-empty, non-null string:
+  1. `buildPrompt()` appends a `STYLE TEMPLATE — MANDATORY:` block to the system prompt.
+  2. The block instructs the model to mimic tone, paragraph structure, formatting, spacing,
+     emoji usage, and sales style — across ALL generated locales (en, uk, ru, sq, it).
+  3. The block explicitly forbids the model from:
+     - Copying any factual content (price, city, size, address, type) from the example.
+     - Inventing facts to match the example.
+     - Using the example as a content source.
+  4. The example text is wrapped between `---STYLE EXAMPLE BEGIN---` / `---STYLE EXAMPLE END---`
+     markers for unambiguous parsing by the model.
+
+When the field is null / empty: the style template block is omitted entirely and the model
+uses its default editorial style. No fallback text or degraded output.
+
+---
+
+## HOW REGENERATION USES THE EXAMPLE
+
+Two regeneration paths both respect the operator style:
+
+1. Initial draft generation (`/api/listing-sessions/[id]/generate-draft`):
+   Calls `generateListingDraft()` → loads operator settings → passes `descriptionStyleExample`
+   to `draftGenerator.generate()`.
+
+2. Conversational edit with full rewrite (`/api/listing-sessions/[id]/conversational-edit`):
+   When `needsContentRewrite = true`, the route loads operator settings independently and passes
+   `descriptionStyleExample` alongside `contentBrief` to `draftGenerator.generate()`.
+   The `contentBrief` (extracted from the user message, e.g. "rewrite for investor audience")
+   and the `descriptionStyleExample` are both injected — so the final text respects both the
+   operator's house style and the user's specific regeneration intent.
+
+---
+
+## VERIFICATION SCENARIOS
+
+1. Empty setting (default behaviour):
+   - PATCH /api/operator-settings with `{ "descriptionExample": null }`
+   - Generate a draft → AI uses default editorial style
+   - Expected: no style template block in prompt; output should look like existing drafts
+
+2. Style example set:
+   - PATCH /api/operator-settings with a sample description (e.g. emoji-heavy, informal style)
+   - Generate a draft → AI should produce output matching the example's emoji pattern, paragraph
+     count, and informal tone while using only facts from the new listing
+   - Expected: descriptions noticeably styled like the example; no factual overlap with example
+
+3. Empty string coercion:
+   - PATCH /api/operator-settings with `{ "descriptionExample": "" }`
+   - GET /api/operator-settings → should return `{ "descriptionExample": null }` (not "")
+   - Expected: no residual empty string in DB or generation path
+
+4. Conversational rewrite respects style:
+   - Set a style example, create a draft, then send instruction "rewrite for investor audience"
+   - Expected: rewritten draft uses investor framing (from contentBrief) AND the house style
+     (from descriptionStyleExample); both influences visible in output
+
+5. Settings UI load/save cycle:
+   - Navigate to Settings → AI Generation section shows current value from DB
+   - Edit text, click Save → "Saving…" appears, then "Saved" for 2.5 s
+   - Reload page → textarea shows saved value
+   - Clear textarea, Save → DB value is null; generation uses default style
+
+6. Non-fatal failure:
+   - Simulate DB unavailability during generation → `getOperatorSettings().catch()` returns
+     `{ descriptionExample: null }` → draft generation proceeds normally with default style
+
+---
+
+## REMAINING RISKS
+
+1. Prompt injection via style example:
+   The style example is operator-supplied and injected verbatim into the system prompt between
+   clear markers. A malicious operator could embed adversarial instructions in the example text.
+   Mitigation in place: the markers and surrounding wording make the example's role explicit.
+   Recommendation: add server-side length cap (e.g. 4000 chars) and strip known jailbreak
+   patterns before storing if untrusted operators are a concern.
+
+2. Style bleed into factual fields:
+   The style template is intended to affect only description/title/shortDescription prose.
+   Structured fields (price, address, facts) are always sourced from extractedFacts. The prompt
+   contains explicit "MUST NOT copy facts" language; however, a strongly-styled example with
+   numeric content might still influence price formatting. Consider adding a note in the UI.
+
+3. Large style examples increasing token cost:
+   Very long examples (several thousand words) will increase prompt token count and generation
+   cost. No hard cap is enforced today. Recommendation: cap at 2000–4000 characters in the UI
+   or server-side validation in the PATCH handler.
+
+4. Settings UI does not show translated hint text for current interface language:
+   The hint text updates correctly when the user changes the interface language (it uses `t.*`
+   from the settings context). However the textarea content itself is always the operator's
+   raw example text (non-translatable by design — it's a content template, not a UI label).
+
+5. No auth / RBAC on the operator-settings API:
+   The GET and PATCH endpoints are currently open. In a multi-tenant or multi-role deployment,
+   access to these endpoints should be restricted to operator-role users.

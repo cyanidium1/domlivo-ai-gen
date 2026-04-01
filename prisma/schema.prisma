@@ -61,3 +61,13 @@ model SessionAsset {
 
   @@index([sessionId])
 }
+
+/// Singleton operator-level settings (id is always "singleton").
+/// Stores configuration that affects AI generation behaviour globally.
+model OperatorSettings {
+  id                 String   @id @default("singleton")
+  /// Operator-supplied example description used as a style/structure template for AI generation.
+  /// The AI is instructed to mimic format, tone, and emoji usage — but NOT copy factual content.
+  descriptionExample String?
+  updatedAt          DateTime @updatedAt
+}
